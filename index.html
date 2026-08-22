@@ -119,6 +119,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 .sfhdr{display:flex;justify-content:space-between;align-items:center;font-size:12px;
   margin:12px 0 6px;font-weight:600}
 .sfhdr small{color:var(--dim);font-weight:400}
+.bud{display:grid;place-items:center;filter:drop-shadow(0 2px 5px #000e)}
+.bud img{display:block}
 .qm{font-size:27px;text-align:center;filter:drop-shadow(0 2px 4px #000d)}
 #toast{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:800;
   background:#000c;border:1px solid var(--line);border-radius:10px;padding:11px 16px;
@@ -208,7 +210,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="0.3";
+const WERSJA="0.4";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -644,16 +646,106 @@ function refreshHUD(){
     <div class="chip">${w.pora.em} <b>${w.pora.n}</b></div>
     <div class="chip">${w.pogoda.em} <b>${w.pogoda.n}</b>${w.temp!=null?` ${Math.round(w.temp)}°`:''}</div>
     <div class="chip">${w.sezon.em} <b>${w.sezon.n}</b></div>
-    <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>`:
+    <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>
+    <div class="chip">🗺️ <b>${OSM.stan}</b>${OSM.poi.length?` · ${Bud.lista.length} bud.`:''}</div>`:
     `<div class="chip">📡 szukam sygnału…</div>`;
 }
+
+/* ================= OSM: jedno zapytanie na okolicę =================
+   Poprzednio gra pytała Overpass o teren przy każdej zmianie komórki (co 110 m).
+   Przy zwykłym spacerze to dziesiątki zapytań na minutę — publiczny serwer
+   odcinał je limitem i teren zawsze wychodził "Równina".
+   Teraz: JEDNO zapytanie na obszar 1,2 km, z którego lokalnie liczymy i biom,
+   i budynki. Wynik siedzi w localStorage przez dobę. */
+const OSM={
+  R:1200,            // promień pobieranego obszaru
+  PROG:700,          // po przekroczeniu tylu metrów od kotwicy pobieramy nowy
+  anchor:null, land:[], poi:[], stan:'—', czekaj:false, blokadaDo:0,
+
+  klucz(p){ return 'osm_'+p.lat.toFixed(2)+'_'+p.lng.toFixed(2) },
+
+  async ensure(pos){
+    if(this.anchor && dist(this.anchor,pos)<this.PROG) return;
+    if(this.czekaj || Date.now()<this.blokadaDo) return;
+    const k=this.klucz(pos);
+    try{
+      const c=JSON.parse(localStorage.getItem(k)||'null');
+      if(c && Date.now()-c.t < 24*3600*1000){
+        this.anchor={lat:c.a[0],lng:c.a[1]}; this.land=c.l; this.poi=c.p;
+        this.stan='z pamięci'; refreshHUD(); Bud.rysuj(); return;
+      }
+    }catch(e){}
+    this.czekaj=true; this.stan='pobieram…'; refreshHUD();
+    const la=pos.lat.toFixed(4), lo=pos.lng.toFixed(4), R=this.R;
+    const q=`[out:json][timeout:25];(`+
+      `way(around:${R},${la},${lo})["landuse"];`+
+      `way(around:${R},${la},${lo})["natural"];`+
+      `way(around:${R},${la},${lo})["amenity"="grave_yard"];`+
+      `nwr(around:${R},${la},${lo})["amenity"~"^(pub|bar|restaurant|cafe|fast_food)$"];`+
+      `nwr(around:${R},${la},${lo})["shop"];`+
+      `nwr(around:${R},${la},${lo})["craft"];`+
+      `);out center tags 400;`;
+    try{
+      const r=await fetch('https://overpass-api.de/api/interpreter',
+        {method:'POST',body:'data='+encodeURIComponent(q)});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const j=await r.json();
+      this.parsuj(j, pos);
+      this.stan='ok';
+      try{ localStorage.setItem(k, JSON.stringify(
+        {t:Date.now(), a:[pos.lat,pos.lng], l:this.land, p:this.poi})); }catch(e){}
+    }catch(e){
+      this.stan='brak łączności';
+      this.blokadaDo=Date.now()+60000;      // nie dobijaj serwera po błędzie
+    }
+    this.czekaj=false; refreshHUD(); Bud.rysuj(); Spawner.refresh();
+  },
+
+  parsuj(j,pos){
+    this.anchor=pos; this.land=[]; this.poi=[];
+    (j.elements||[]).forEach(el=>{
+      const t=el.tags||{}; const c=el.center||el;
+      const la=c.lat, lo=c.lon; if(la==null||lo==null) return;
+      // --- teren ---
+      let b=null;
+      if(t.natural==='water'||t.waterway) b='woda';
+      else if(t.natural==='wood'||t.landuse==='forest') b='las';
+      else if(t.natural==='wetland') b='bagno';
+      else if(['peak','cliff','scree','ridge','rock'].includes(t.natural)) b='gory';
+      else if(t.landuse==='cemetery'||t.amenity==='grave_yard') b='cmentarz';
+      else if(['residential','commercial','industrial','retail'].includes(t.landuse)) b='miasto';
+      else if(['farmland','meadow','grass','orchard','vineyard'].includes(t.landuse)) b='pole';
+      if(b) this.land.push([+la.toFixed(5),+lo.toFixed(5),b]);
+      // --- budynki ---
+      let rodz=null;
+      if(/^(pub|bar|restaurant|cafe|fast_food)$/.test(t.amenity||'')) rodz='karczma';
+      else if(t.craft || t.shop==='hardware' || t.shop==='doityourself') rodz='kowal';
+      else if(t.shop) rodz='sklep';
+      if(rodz) this.poi.push([+la.toFixed(5),+lo.toFixed(5),rodz,(t.name||'').slice(0,28)]);
+    });
+  },
+
+  /* biom = przewaga terenów w promieniu 220 m, ważona odwrotnie odległością */
+  biome(pos){
+    const sc={};
+    for(const [la,lo,b] of this.land){
+      const d=dist(pos,{lat:la,lng:lo});
+      if(d>220) continue;
+      sc[b]=(sc[b]||0)+1/Math.max(40,d);
+    }
+    let best=null,bv=0;
+    for(const k in sc) if(sc[k]>bv){bv=sc[k];best=k}
+    return best||'rownina';
+  }
+};
 
 /* ---------------- World: biom + pogoda ---------------- */
 const World={
   state:null,biomCache:{},lastWeather:0,weather:null,lastBiomCell:null,
   async update(pos){
     const now=new Date();
-    const biom=await this.biome(pos);
+    await OSM.ensure(pos);
+    const biom=OSM.biome(pos);
     const wx=await this.weatherAt(pos);
     this.state={biom,pogoda:weatherOf(wx.code),temp:wx.temp,
       pora:partOfDay(now),sezon:seasonOf(now)};
@@ -668,31 +760,75 @@ const World={
     }catch(e){this.weather={code:1,temp:null}}
     this.lastWeather=Date.now();return this.weather;
   },
-  async biome(pos){
-    const c=cellId(pos);
-    if(this.biomCache[c])return this.biomCache[c];
-    let b='rownina';
-    try{
-      const q=`[out:json][timeout:12];(way(around:160,${pos.lat},${pos.lng})["natural"];`+
-              `way(around:160,${pos.lat},${pos.lng})["landuse"];`+
-              `way(around:160,${pos.lat},${pos.lng})["amenity"="grave_yard"];`+
-              `relation(around:160,${pos.lat},${pos.lng})["natural"="water"];);out tags 40;`;
-      const r=await fetch("https://overpass-api.de/api/interpreter",{method:"POST",body:"data="+encodeURIComponent(q)});
-      const j=await r.json();
-      const score={las:0,woda:0,gory:0,miasto:0,pole:0,bagno:0,cmentarz:0};
-      (j.elements||[]).forEach(el=>{const t=el.tags||{};
-        if(t.natural==='water'||t.waterway)score.woda+=3;
-        if(t.natural==='wood'||t.landuse==='forest')score.las+=3;
-        if(t.natural==='wetland')score.bagno+=4;
-        if(['peak','cliff','scree','ridge','rock'].includes(t.natural))score.gory+=4;
-        if(['residential','commercial','industrial','retail'].includes(t.landuse))score.miasto+=2;
-        if(['farmland','meadow','grass','orchard','vineyard'].includes(t.landuse))score.pole+=2;
-        if(t.landuse==='cemetery'||t.amenity==='grave_yard')score.cmentarz+=6;
-      });
-      let best=null,bv=0;for(const k in score)if(score[k]>bv){bv=score[k];best=k}
-      if(best&&bv>=2)b=best;
-    }catch(e){/* offline / rate limit → równina */}
-    this.biomCache[c]=b;return b;
+};
+
+/* ================= BUDYNKI =================
+   Stoją na prawdziwych miejscach z OSM: realny pub = karczma, realny sklep
+   = sklep, warsztat = kowal. Gdy w okolicy nie ma nic (wieś), gra stawia
+   wędrownego kupca i obozowisko na siatce — żeby nikt nie został bez handlu. */
+const RODZAJE={
+  karczma:{n:"Karczma", em:"🍺", opis:"Zlecenia, odpoczynek, plotki"},
+  sklep:  {n:"Sklep",   em:"🏪", opis:"Ekwipunek i mikstury"},
+  kowal:  {n:"Kowal",   em:"🔨", opis:"Ulepszanie ekwipunku"},
+  kupiec: {n:"Wędrowny kupiec", em:"🛒", opis:"Handlarz w drodze"},
+  obozowisko:{n:"Obozowisko", em:"⛺", opis:"Odpoczynek przy ognisku"}
+};
+const ZASIEG_BUD=40;      // metrów — do sklepu trzeba faktycznie dojść
+
+const Bud={
+  markery:{}, lista:[],
+  /* wybiera najbliższe budynki, żeby w centrum miasta nie zrobiła się choinka */
+  wybierz(pos){
+    const limit={karczma:1, sklep:2, kowal:1};
+    const grupy={};
+    OSM.poi.forEach(([la,lo,r,nazwa])=>{
+      (grupy[r]=grupy[r]||[]).push({lat:la,lng:lo,rodzaj:r,nazwa,d:dist(pos,{lat:la,lng:lo})});
+    });
+    let out=[];
+    for(const r in limit){
+      const g=(grupy[r]||[]).sort((a,b)=>a.d-b.d).slice(0,limit[r]);
+      out=out.concat(g);
+    }
+    /* awaryjnie: nic w okolicy -> stawiamy na siatce, deterministycznie */
+    if(!out.length && OSM.stan!=='pobieram…'){
+      const id=cellId(pos), r=rng(hash('bud|'+id));
+      const c=cellCenter(id);
+      out=[{...offset(c, ri(r,0,359), ri(r,150,400)), rodzaj:'kupiec', nazwa:'', d:0},
+           {...offset(c, ri(r,0,359), ri(r,150,400)), rodzaj:'obozowisko', nazwa:'', d:0}];
+    }
+    return out;
+  },
+  rysuj(){
+    if(!Game.map||!Game.pos) return;
+    const nowe=this.wybierz(Game.pos); this.lista=nowe;
+    const zyje={};
+    nowe.forEach(b=>{
+      const k=b.rodzaj+'|'+b.lat.toFixed(5)+'|'+b.lng.toFixed(5);
+      zyje[k]=1;
+      if(this.markery[k]) return;
+      const R=RODZAJE[b.rodzaj];
+      const mk=L.marker([b.lat,b.lng],{icon:L.divIcon({className:'',
+        html:`<div class="bud">${icon(R.em,'ui',b.rodzaj,34)}</div>`,
+        iconSize:[38,38],iconAnchor:[19,19]})})
+        .addTo(Game.map).on('click',()=>Bud.wejdz(b));
+      this.markery[k]=mk;
+    });
+    for(const k in this.markery)
+      if(!zyje[k]){ Game.map.removeLayer(this.markery[k]); delete this.markery[k] }
+  },
+  wejdz(b){
+    const d=Game.pos?Math.round(dist(Game.pos,b)):999;
+    const R=RODZAJE[b.rodzaj];
+    if(d>ZASIEG_BUD){
+      toast(`${R.em} <b>${b.nazwa||R.n}</b><br>${d} m stąd —
+        <span style="color:#8b949e">podejdź na ${ZASIEG_BUD} m</span>`,2600);
+      return;
+    }
+    UI.generic(b.nazwa||R.n, `
+      <div style="text-align:center;font-size:44px">${icon(R.em,'ui',b.rodzaj,56)}</div>
+      <p class="muted" style="text-align:center">${R.opis}</p>
+      <p class="muted">Wnętrze budynku powstaje w kolejnym kroku —
+      handel, ulepszanie i tablica zleceń. Na razie możesz tu tylko zajrzeć.</p>`);
   }
 };
 
@@ -1017,6 +1153,8 @@ const Game={
     /* przeliczaj świat gdy zmieniamy komórkę */
     const c=cellId(p);
     if(c!==World.lastBiomCell){World.lastBiomCell=c;World.update(p)}
+    OSM.ensure(p);            // dociąga okolicę, gdy oddalisz się od kotwicy
+    Bud.rysuj();
     Quest.check();refreshHUD();
     if(now-this.worldT>4000){this.worldT=now;Spawner.refresh();save()}
   },
