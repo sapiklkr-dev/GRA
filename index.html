@@ -222,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="1.0";
+const WERSJA="1.2";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -668,6 +668,8 @@ function diagnostyka(){
     <div class="stat">Pozycja<b style="font-size:11px">${Game.pos?Game.pos.lat.toFixed(4)+', '+Game.pos.lng.toFixed(4):'brak'}</b></div>
   </div>`;
   if(OSM.blad) h+=`<p class="muted" style="color:var(--hp)">Ostatni błąd: ${OSM.blad}</p>`;
+  if(OSM.uciete) h+=`<p class="muted" style="color:var(--gold)">Odpowiedź osiągnęła limit —
+    okolica jest bardzo gęsta, część miejsc mogła zostać pominięta.</p>`;
   h+=`<div class="sfhdr"><span>Serwery map</span><small>ostatnia próba</small></div>`;
   if(!OSM.proby.length) h+=`<p class="muted">Jeszcze nie odpytywano.</p>`;
   OSM.proby.forEach(p=>{
@@ -677,10 +679,10 @@ function diagnostyka(){
   });
   if(OSM.poi.length){
     h+=`<div class="sfhdr"><span>Znalezione miejsca</span><small>${OSM.poi.length}</small></div>`;
-    OSM.poi.slice(0,12).forEach(([la,lo,r,n])=>{
+    OSM.poi.slice(0,12).forEach(([la,lo,r])=>{
       const d=Game.pos?Math.round(dist(Game.pos,{lat:la,lng:lo})):'?';
       h+=`<div class="item"><div class="em">${RODZAJE[r]?RODZAJE[r].em:'📍'}</div>
-        <div class="t"><b style="font-size:12px">${n||'(bez nazwy)'}</b>
+        <div class="t"><b style="font-size:12px">${nazwijBudynek(r,la,lo)}</b>
         <small>${r} · ${d} m</small></div></div>`;
     });
   }
@@ -772,7 +774,7 @@ function refreshHUD(){
 const OSM={
   R:1200,            // promień pobieranego obszaru
   PROG:700,          // po przekroczeniu tylu metrów od kotwicy pobieramy nowy
-  anchor:null, land:[], poi:[], stan:'—', blad:null, czekaj:false, blokadaDo:0,
+  anchor:null, land:[], poi:[], stan:'—', blad:null, uciete:false, czekaj:false, blokadaDo:0,
 
   WER:2,   // podbij przy zmianie zapytania, żeby unieważnić stary cache
   klucz(p){ return 'osm'+this.WER+'_'+p.lat.toFixed(2)+'_'+p.lng.toFixed(2) },
@@ -797,7 +799,7 @@ const OSM={
       `nwr(around:1000,${la},${lo})["amenity"~"^(pub|bar|restaurant|cafe|fast_food)$"];`+
       `nwr(around:1000,${la},${lo})["shop"];`+
       `nwr(around:1000,${la},${lo})["craft"];`+
-      `);out tags center 120;`;
+      `);out tags center 200;`;
     const LAND='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|orchard|cemetery|allotments|village_green|recreation_ground)$';
     const NAT='^(water|wood|wetland|scrub|heath|grassland|cliff|peak)$';
     const qLand=`[out:json][timeout:12];(`+
@@ -805,14 +807,14 @@ const OSM={
       `way(around:700,${la},${lo})["natural"~"${NAT}"];`+
       `);out tags center 120;`;
     this.ostatnieZapytanie=qPoi;
-    this.anchor=pos; this.land=[]; this.poi=[];
+    this.anchor=pos; this.land=[]; this.poi=[]; this.uciete=false;
     let udanePoi=false;
     try{
-      this.dopisz(await this.pytaj(qPoi,'miejsca'));
+      this.dopisz(await this.pytaj(qPoi,'miejsca'), 200);
       udanePoi=true;
     }catch(e){ this.blad='miejsca: '+String(e.message||e).slice(0,40) }
     try{
-      this.dopisz(await this.pytaj(qLand,'teren'));
+      this.dopisz(await this.pytaj(qLand,'teren'), 120);
     }catch(e){ if(!this.blad) this.blad='teren: '+String(e.message||e).slice(0,40) }
     try{
       this.stan = (udanePoi||this.land.length) ? 'ok' : 'błąd';
@@ -873,7 +875,8 @@ const OSM={
     throw new Error(ostatni||'wszystkie serwery zawiodły');
   },
 
-  dopisz(j){
+  dopisz(j, limit){
+    if(limit && (j.elements||[]).length>=limit) this.uciete=true;
     (j.elements||[]).forEach(el=>{
       const t=el.tags||{}; const c=el.center||el;
       const la=c.lat, lo=c.lon; if(la==null||lo==null) return;
@@ -892,7 +895,7 @@ const OSM={
       if(/^(pub|bar|restaurant|cafe|fast_food)$/.test(t.amenity||'')) rodz='karczma';
       else if(t.craft || t.shop==='hardware' || t.shop==='doityourself') rodz='kowal';
       else if(t.shop) rodz='sklep';
-      if(rodz) this.poi.push([+la.toFixed(5),+lo.toFixed(5),rodz,(t.name||'').slice(0,28)]);
+      if(rodz) this.poi.push([+la.toFixed(5),+lo.toFixed(5),rodz]);   // nazwy nadajemy własne
     });
   },
 
@@ -953,27 +956,62 @@ const RODZAJE={
   obozowisko:{n:"Obozowisko", em:"⛺", opis:"Odpoczynek przy ognisku"}
 };
 const ZASIEG_BUD=40;      // metrów — do sklepu trzeba faktycznie dojść
+const ODSTEP_BUD=350;     // minimalny odstęp między budynkami — inaczej w centrum
+                          // miasta robi się ich kilka w zasięgu wzroku
+
+/* Nazwy własne zamiast szyldów z OSM. Miejsce zostaje prawdziwe (ta knajpa
+   na rogu), ale nazywa się po swojemu — "Karczma Żabka" psułaby klimat,
+   a przy okazji nie używamy cudzych nazw handlowych.
+   Nazwa jest deterministyczna z położenia, więc dane miejsce zawsze
+   nazywa się tak samo — u Ciebie i u kolegi. */
+const NAZWY={
+  karczma:['Pod Złotym Kuflem','Pod Czarnym Krukiem','Pod Zieloną Beczką',
+    'Pod Trzema Dębami','Pod Siwym Wilkiem','Pod Białym Jeleniem',
+    'Pod Kamiennym Stołem','Pod Rudą Lisicą','Pod Dzikim Chmielem',
+    'Pod Pękniętą Podkową','Pod Starym Mostem','Pod Ślepym Bardem'],
+  sklep:['Kram Wędrowca','Skład Osobliwości','Handel u Marty',
+    'Kram pod Wagą','Zaopatrzenie Grzegorza','Skład Podróżny',
+    'Towary Kolonialne','Kram Szczęśliwej Ręki','Skład za Bramą'],
+  kowal:['Kuźnia pod Młotem','Stara Kuźnia','Żelazna Ręka',
+    'Kuźnia pod Kowadłem','Warsztat Bartosza','Kuźnia na Skarpie'],
+  kupiec:['Wóz Kupiecki','Wędrowny Handlarz','Kramarz z Traktu'],
+  obozowisko:['Obozowisko','Ognisko przy Trakcie','Postój Wędrowców']
+};
+function nazwijBudynek(rodzaj, lat, lng){
+  const lista=NAZWY[rodzaj]||['Miejsce'];
+  const r=rng(hash('nazwa|'+rodzaj+'|'+lat.toFixed(5)+'|'+lng.toFixed(5)));
+  return lista[Math.floor(r()*lista.length)];
+}
 
 const Bud={
   markery:{}, lista:[],
-  /* wybiera najbliższe budynki, żeby w centrum miasta nie zrobiła się choinka */
+  /* Po jednym budynku każdego rodzaju, w dodatku rozrzucone — w centrum
+     miasta bez odstępu robiła się kupa znaczników w zasięgu wzroku. */
   wybierz(pos){
-    const limit={karczma:1, sklep:2, kowal:1};
+    const limit={karczma:1, sklep:1, kowal:1};
     const grupy={};
-    OSM.poi.forEach(([la,lo,r,nazwa])=>{
-      (grupy[r]=grupy[r]||[]).push({lat:la,lng:lo,rodzaj:r,nazwa,d:dist(pos,{lat:la,lng:lo})});
+    OSM.poi.forEach(([la,lo,r])=>{
+      (grupy[r]=grupy[r]||[]).push({lat:la,lng:lo,rodzaj:r,d:dist(pos,{lat:la,lng:lo})});
     });
     let out=[];
     for(const r in limit){
-      const g=(grupy[r]||[]).sort((a,b)=>a.d-b.d).slice(0,limit[r]);
-      out=out.concat(g);
+      const kand=(grupy[r]||[]).sort((a,b)=>a.d-b.d);
+      for(const k of kand){
+        if(out.length>=Object.keys(limit).length) break;
+        /* pomiń, jeśli za blisko czegoś już wybranego */
+        if(out.some(b=>dist(b,k)<ODSTEP_BUD)) continue;
+        out.push(k);
+        break;                      // po jednym z rodzaju
+      }
     }
+    out.forEach(b=>{ if(!b.nazwa) b.nazwa=nazwijBudynek(b.rodzaj,b.lat,b.lng) });
     /* awaryjnie: nic w okolicy -> stawiamy na siatce, deterministycznie */
     if(!out.length && OSM.stan!=='pobieram…'){
       const id=cellId(pos), r=rng(hash('bud|'+id));
       const c=cellCenter(id);
-      out=[{...offset(c, ri(r,0,359), ri(r,150,400)), rodzaj:'kupiec', nazwa:'', d:0},
-           {...offset(c, ri(r,0,359), ri(r,150,400)), rodzaj:'obozowisko', nazwa:'', d:0}];
+      const k1=offset(c, ri(r,0,359), ri(r,200,450)), k2=offset(c, ri(r,0,359), ri(r,200,450));
+      out=[{...k1, rodzaj:'kupiec', nazwa:nazwijBudynek('kupiec',k1.lat,k1.lng), d:0},
+           {...k2, rodzaj:'obozowisko', nazwa:nazwijBudynek('obozowisko',k2.lat,k2.lng), d:0}];
     }
     return out;
   },
