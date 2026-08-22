@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 1.7</title>
+<title>GeoRPG 1.8</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -222,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="1.7";
+const WERSJA="1.8";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -776,7 +776,7 @@ function refreshHUD(){
    podręcznej, więc każda zmiana automatycznie unieważnia stare zapisy. */
 const LAND_TAGI='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|cemetery)$';
 const NAT_TAGI='^(water|wood|wetland|grassland|peak)$';
-const SZABLON_ZAPYTAN='poi1000/200+land500/80|'+LAND_TAGI+'|'+NAT_TAGI;
+const SZABLON_ZAPYTAN='poi1000/200+land500/80|klas2|'+LAND_TAGI+'|'+NAT_TAGI;
 
 const OSM={
   R:1200,            // promień pobieranego obszaru
@@ -821,11 +821,11 @@ const OSM={
     this.anchor=pos; this.land=[]; this.poi=[]; this.uciete=false;
     let udanePoi=false;
     try{
-      this.dopisz(await this.pytaj(qPoi,'miejsca'), 200);
+      this.dopisz(await this.pytaj(qPoi,'miejsca',false,20000), 200);   // miejsca bywają wolne
       udanePoi=true;
     }catch(e){ this.blad='miejsca: '+String(e.message||e).slice(0,40) }
     try{
-      this.dopisz(await this.pytaj(qLand,'teren'), 80);
+      this.dopisz(await this.pytaj(qLand,'teren',false,13000), 80);
     }catch(e){ if(!this.blad) this.blad='teren: '+String(e.message||e).slice(0,40) }
     try{
       this.stan = (udanePoi||this.land.length) ? 'ok' : 'błąd';
@@ -870,13 +870,13 @@ const OSM={
     'https://overpass.private.coffee/api/interpreter'
   ],
   proby:[], LIMIT_MS:13000,
-  async pytaj(q, etykieta, dopuscPusto){
+  async pytaj(q, etykieta, dopuscPusto, limitMs){
     let ostatni=null;
     for(const url of this.SERWERY){
       const t0=Date.now();
       try{
         const ac=new AbortController();
-        const stoper=setTimeout(()=>ac.abort(), this.LIMIT_MS);
+        const stoper=setTimeout(()=>ac.abort(), limitMs||this.LIMIT_MS);
         const r=await fetch(url+'?data='+encodeURIComponent(q),
           {method:'GET', signal:ac.signal, mode:'cors', cache:'no-store'});
         clearTimeout(stoper);
@@ -919,7 +919,8 @@ const OSM={
       // --- budynki ---
       let rodz=null;
       if(/^(pub|bar|restaurant|cafe|fast_food)$/.test(t.amenity||'')) rodz='karczma';
-      else if(t.craft || t.shop==='hardware' || t.shop==='doityourself') rodz='kowal';
+      else if(t.craft || /^(hardware|doityourself|car_repair|bicycle|locksmith|tyres|trade|paint|tool_hire|motorcycle_repair|agrarian)$/.test(t.shop||''))
+        rodz='kowal';
       else if(t.shop) rodz='sklep';
       if(rodz) this.poi.push([+la.toFixed(5),+lo.toFixed(5),rodz]);   // nazwy nadajemy własne
     });
