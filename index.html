@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 1.5</title>
+<title>GeoRPG 1.6</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -222,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="1.5";
+const WERSJA="1.6";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -798,7 +798,7 @@ const OSM={
     try{
       const c=JSON.parse(localStorage.getItem(k)||'null');
       const podejrzany = c && c.p && c.p.length>50 && (!c.l || !c.l.length);
-      if(c && !podejrzany && Date.now()-c.t < 24*3600*1000){
+      if(c && !podejrzany && Date.now()-c.t < 7*24*3600*1000){
         this.anchor={lat:c.a[0],lng:c.a[1]}; this.land=c.l; this.poi=c.p;
         this.stan='z pamięci'; refreshHUD(); Bud.rysuj(); return;
       }
@@ -839,12 +839,23 @@ const OSM={
     }catch(e){
       this.stan='błąd'; this.blad=String(e.message||e).slice(0,60);
     }
-    if(this.stan==='błąd') this.blokadaDo=Date.now()+45000;
+    if(this.stan==='błąd'){
+      this.blokadaDo=Date.now()+90000;
+      /* Serwery bywają chwilowo przeciążone (HTTP 504). Zamiast czekać, aż
+         gracz gdzieś pójdzie, spróbujemy sami za półtorej minuty. */
+      if(!this._ponawianie){
+        this._ponawianie=setInterval(()=>{
+          if(this.stan==='ok'||this.poi.length){ clearInterval(this._ponawianie); this._ponawianie=null; return }
+          this.anchor=null; this.blokadaDo=0;
+          if(Game.pos) this.ensure(Game.pos);
+        }, 95000);
+      }
+    }
     this.czekaj=false; refreshHUD(); Bud.rysuj(); Spawner.refresh();
     if(this.stan==='ok' && !this.poi.length)
       toast('🗺️ Brak sklepów i knajp w promieniu 1,2 km<br><span style="color:#8b949e">stawiam obozowisko i wędrownego kupca</span>',3000);
     if(this.stan==='błąd')
-      toast('🗺️ <b>Nie udało się pobrać mapy</b><br><span style="color:#8b949e">Postać → 🩺 Diagnostyka pokaże szczegóły</span>',3600);
+      toast('🗺️ <b>Serwer map nie odpowiada</b><br><span style="color:#8b949e">Gra działa dalej — obozowisko, kupiec i polowa kuźnia<br>zastępują karczmę, sklep i kowala. Spróbuję ponownie w tle.</span>',4200);
   },
 
   /* Diagnostyka z terenu pokazała dwie różne awarie:
@@ -856,9 +867,7 @@ const OSM={
   SERWERY:[
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
-    'https://overpass.private.coffee/api/interpreter',
-    'https://overpass.osm.jp/api/interpreter',
-    'https://overpass.openstreetmap.fr/api/interpreter'
+    'https://overpass.private.coffee/api/interpreter'
   ],
   proby:[], LIMIT_MS:13000,
   async pytaj(q, etykieta, dopuscPusto){
@@ -1030,13 +1039,22 @@ const Bud={
       }
     }
     out.forEach(b=>{ if(!b.nazwa) b.nazwa=nazwijBudynek(b.rodzaj,b.lat,b.lng) });
-    /* awaryjnie: nic w okolicy -> stawiamy na siatce, deterministycznie */
+    /* TRYB AWARYJNY — gdy mapa OSM nie odpowiada albo w okolicy nic nie ma.
+       Kluczowe: musi dawać PEŁNĄ rozgrywkę, nie namiastkę. Darmowe serwery
+       map bywają niedostępne i gra nie może przez to przestać działać:
+         wędrowny kupiec  = sklep
+         obozowisko       = karczma (zlecenia, odpoczynek)
+         polowa kuźnia    = kowal
+       Rozstawione deterministycznie, więc nie skaczą po mapie. */
     if(!out.length && OSM.stan!=='pobieram…'){
-      const id=cellId(pos), r=rng(hash('bud|'+id));
-      const c=cellCenter(id);
-      const k1=offset(c, ri(r,0,359), ri(r,200,450)), k2=offset(c, ri(r,0,359), ri(r,200,450));
-      out=[{...k1, rodzaj:'kupiec', nazwa:nazwijBudynek('kupiec',k1.lat,k1.lng), d:0},
-           {...k2, rodzaj:'obozowisko', nazwa:nazwijBudynek('obozowisko',k2.lat,k2.lng), d:0}];
+      const id=cellId(pos), c=cellCenter(id);
+      out=['kupiec','obozowisko','kowal'].map((rodz,i)=>{
+        const r=rng(hash('bud|'+id+'|'+rodz));
+        const p=offset(c, ri(r,0,359), ri(r,180,420));
+        return {...p, rodzaj:rodz, awaryjny:true,
+                nazwa: rodz==='kowal' ? 'Polowa kuźnia' : nazwijBudynek(rodz,p.lat,p.lng),
+                d: dist(pos,p)};
+      });
     }
     return out;
   },
@@ -1068,6 +1086,7 @@ const Bud={
       return;
     }
     this.aktualny=b;
+    if(b.awaryjny) toast('⛺ Miejsce polowe — mapa okolicy niedostępna',1800);
     if(b.rodzaj==='karczma'||b.rodzaj==='obozowisko') return Karczma.otworz(b);
     if(b.rodzaj==='kowal') return Kowal.otworz(b);
     return Sklep.otworz(b);
