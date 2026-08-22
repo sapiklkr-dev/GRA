@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>GeoRPG — prototyp</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --line:#30363d; --txt:#e6edf3; --dim:#8b949e;
+  --gold:#e3b341; --hp:#f85149; --xp:#3fb950; --acc:#58a6ff;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--txt);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+#map{position:absolute;inset:0;background:#0d1117}
+.leaflet-container{background:#0d1117}
+
+/* ---------- HUD ---------- */
+#hud{position:absolute;top:0;left:0;right:0;z-index:600;padding:8px 10px;
+  padding-top:calc(8px + env(safe-area-inset-top));
+  background:linear-gradient(#0d1117ee,#0d1117cc 70%,transparent);pointer-events:none}
+.row{display:flex;align-items:center;gap:8px}
+.avatar{width:38px;height:38px;border-radius:10px;background:var(--panel);border:1px solid var(--line);
+  display:grid;place-items:center;font-size:20px;flex:none}
+.bars{flex:1;min-width:0}
+.nameline{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px}
+.nameline b{font-weight:600}
+.bar{height:7px;border-radius:4px;background:#21262d;overflow:hidden;margin-bottom:3px}
+.bar>i{display:block;height:100%;width:0;transition:width .25s}
+.bar.hp>i{background:var(--hp)} .bar.xp>i{background:var(--xp)}
+#gold{color:var(--gold);font-size:12px;white-space:nowrap}
+
+#env{margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;font-size:11px}
+.chip{background:#161b22cc;border:1px solid var(--line);border-radius:999px;padding:3px 9px;
+  color:var(--dim);backdrop-filter:blur(6px)}
+.chip b{color:var(--txt);font-weight:600}
+
+/* ---------- dolny pasek ---------- */
+#dock{position:absolute;left:0;right:0;bottom:0;z-index:600;display:flex;gap:6px;padding:8px;
+  padding-bottom:calc(8px + env(safe-area-inset-bottom));
+  background:linear-gradient(transparent,#0d1117cc 30%,#0d1117)}
+.btn{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--txt);
+  border-radius:10px;padding:11px 4px;font-size:11px;font-weight:600;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:3px}
+.btn:active{background:#21262d}
+.btn span{font-size:17px;line-height:1}
+.btn.on{border-color:var(--acc);color:var(--acc)}
+
+/* ---------- modale ---------- */
+.mask{position:fixed;inset:0;z-index:900;background:#000b;display:none;
+  align-items:flex-end;justify-content:center;backdrop-filter:blur(3px)}
+.mask.show{display:flex}
+.sheet{width:100%;max-width:520px;max-height:88vh;overflow-y:auto;background:var(--panel);
+  border:1px solid var(--line);border-bottom:0;border-radius:16px 16px 0 0;padding:16px;
+  padding-bottom:calc(16px + env(safe-area-inset-bottom));animation:up .2s ease}
+@keyframes up{from{transform:translateY(30px);opacity:.4}}
+.sheet h2{margin:0 0 10px;font-size:17px;display:flex;justify-content:space-between;align-items:center}
+.x{background:none;border:0;color:var(--dim);font-size:24px;line-height:1;cursor:pointer;padding:0 4px}
+.muted{color:var(--dim);font-size:12px;line-height:1.55}
+.howto{background:#0d1117;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+  margin:10px 0;font-size:12.5px;line-height:1.9}
+.howto b{color:var(--acc)}
+
+/* walka */
+.foe{text-align:center;padding:6px 0 10px}
+.foe .em{font-size:54px;line-height:1}
+.foe h3{margin:6px 0 2px;font-size:16px}
+#log{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:9px;
+  height:118px;overflow-y:auto;font-size:12px;line-height:1.6;margin:10px 0}
+#log div{margin-bottom:3px}
+.g{color:var(--xp)} .r{color:var(--hp)} .y{color:var(--gold)} .b{color:var(--acc)}
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.acts .btn{flex-direction:row;justify-content:center;font-size:13px;padding:13px 6px}
+
+/* ekwipunek / lista */
+.item{display:flex;align-items:center;gap:10px;padding:9px;border:1px solid var(--line);
+  border-radius:9px;margin-bottom:6px;background:#0d1117}
+.item .em{font-size:24px;flex:none}
+.item .t{flex:1;min-width:0}
+.item .t b{font-size:13px;display:block}
+.item .t small{color:var(--dim);font-size:11px}
+.item button{background:var(--acc);border:0;color:#08111f;font-weight:700;border-radius:7px;
+  padding:7px 11px;font-size:12px;cursor:pointer}
+.item button.off{background:#30363d;color:var(--dim)}
+.rar1{color:#8b949e}.rar2{color:#3fb950}.rar3{color:#58a6ff}.rar4{color:#bc8cff}.rar5{color:#e3b341}
+
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0}
+.stat{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px}
+.stat b{display:block;font-size:16px;margin-top:2px}
+
+/* wybór klasy */
+.cls{display:flex;gap:10px;align-items:center;padding:12px;border:1px solid var(--line);
+  border-radius:10px;margin-bottom:8px;cursor:pointer;background:#0d1117}
+.cls:active{border-color:var(--acc)}
+.cls .em{font-size:32px}
+
+/* marker gracza */
+.me{width:20px;height:20px;border-radius:50%;background:var(--acc);
+  border:3px solid #fff;box-shadow:0 0 0 6px #58a6ff33,0 2px 8px #000}
+.mob{font-size:29px;text-align:center;line-height:1;filter:drop-shadow(0 2px 4px #000d);
+  animation:bob 2.4s ease-in-out infinite}
+@keyframes bob{50%{transform:translateY(-5px)}}
+.qm{font-size:27px;text-align:center;filter:drop-shadow(0 2px 4px #000d)}
+#toast{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:800;
+  background:#000c;border:1px solid var(--line);border-radius:10px;padding:11px 16px;
+  font-size:13px;text-align:center;display:none;max-width:80%}
+kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11px}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+<div id="toast"></div>
+
+<div id="hud">
+  <div class="row">
+    <div class="avatar" id="avatar" style="pointer-events:auto;cursor:pointer"
+         title="Wyśrodkuj mapę na sobie" onclick="Game.center()">🗡️</div>
+    <div class="bars">
+      <div class="nameline">
+        <b id="pname">Bohater</b>
+        <span id="gold">0 zł</span>
+      </div>
+      <div class="bar hp"><i id="hpb"></i></div>
+      <div class="bar xp"><i id="xpb"></i></div>
+    </div>
+  </div>
+  <div id="env"></div>
+</div>
+
+<div id="dock">
+  <button class="btn" onclick="UI.open('char')"><span>🧙</span>Postać</button>
+  <button class="btn" onclick="UI.open('bag')"><span>🎒</span>Plecak</button>
+  <button class="btn" onclick="UI.open('quest')"><span>📜</span>Quest</button>
+  <button class="btn" id="simBtn" onclick="Sim.toggle()"><span>🕹️</span>Symulacja</button>
+  <button class="btn" onclick="UI.open('help')"><span>❓</span>Pomoc</button>
+</div>
+
+<!-- ===== modale ===== -->
+<div class="mask" id="m-class"><div class="sheet">
+  <h2>GeoRPG</h2>
+  <p class="muted" style="margin-top:0">
+  RPG na prawdziwej mapie. Świat zależy od tego, <b>gdzie naprawdę jesteś</b> —
+  w lesie spawnują wilki, na cmentarzu szkielety. Pogoda i pora dnia są prawdziwe:
+  w nocy wychodzą inne potwory, a podczas burzy częściej trafisz elitę i lepszy łup.</p>
+  <div class="howto">
+    <div><b>1.</b> Chodź — potwory pojawiają się wokół ciebie na mapie.</div>
+    <div><b>2.</b> Kliknij potwora, żeby zaatakować (musisz być bliżej niż 60 m).</div>
+    <div><b>3.</b> Bierz zadania 📜 — trzeba fizycznie dojść na miejsce.</div>
+    <div><b>4.</b> Zakładaj łup w plecaku 🎒 i rozwijaj postać.</div>
+  </div>
+  <p class="muted"><b>Nie masz GPS albo siedzisz przy kompie?</b> Kliknij
+  <b>🕹️ Symulacja</b> na dole — poruszasz się wtedy klawiszami <kbd>WSAD</kbd>
+  lub klikając w mapę. Teren, pogoda i pora dnia nadal są prawdziwe.</p>
+  <p class="muted" style="border-top:1px solid var(--line);padding-top:10px;margin-bottom:8px">
+  Wybierz klasę — na 10. poziomie rozwinie się w jedną z dwóch ścieżek:</p>
+  <div id="classList"></div>
+</div></div>
+
+<div class="mask" id="m-fight"><div class="sheet">
+  <h2>Walka<button class="x" onclick="Fight.tryFlee()">✕</button></h2>
+  <div class="foe">
+    <div class="em" id="fEm">👹</div>
+    <h3 id="fName">Potwór</h3>
+    <div class="muted" id="fSub">poz. 1</div>
+    <div class="bar hp" style="margin-top:8px"><i id="fHp"></i></div>
+  </div>
+  <div id="log"></div>
+  <div class="acts">
+    <button class="btn" onclick="Fight.act('atak')">⚔️ Atak</button>
+    <button class="btn" onclick="Fight.act('silny')">💥 Silny (60%)</button>
+    <button class="btn" onclick="Fight.act('mikst')">🧪 Mikstura</button>
+    <button class="btn" onclick="Fight.tryFlee()">🏃 Ucieczka</button>
+  </div>
+</div></div>
+
+<div class="mask" id="m-generic"><div class="sheet">
+  <h2><span id="gTitle"></span><button class="x" onclick="UI.close()">✕</button></h2>
+  <div id="gBody"></div>
+</div></div>
+
+<script>
+/* =====================================================================
+   GeoRPG — prototyp vertical slice
+   Rdzeń: GPS → biom (OSM) + pora dnia + pogoda (Open-Meteo) + sezon
+          → deterministyczny spawn → walka turowa → loot → progresja
+   Brak backendu. Save w localStorage. Multiplayer/Strava = poza zakresem.
+   ===================================================================== */
+
+/* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
+function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
+function rng(seed){let a=seed>>>0;return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const pick=(r,arr)=>arr[Math.floor(r()*arr.length)];
+const ri=(r,a,b)=>a+Math.floor(r()*(b-a+1));
+
+/* ---------------- geo ---------------- */
+const R=6371000;
+function dist(a,b){const p=Math.PI/180,dLa=(b.lat-a.lat)*p,dLo=(b.lng-a.lng)*p,
+  la1=a.lat*p,la2=b.lat*p;const x=Math.sin(dLa/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLo/2)**2;
+  return 2*R*Math.asin(Math.sqrt(x))}
+function offset(p,brgDeg,m){const br=brgDeg*Math.PI/180,la=p.lat*Math.PI/180,lo=p.lng*Math.PI/180,d=m/R;
+  const la2=Math.asin(Math.sin(la)*Math.cos(d)+Math.cos(la)*Math.sin(d)*Math.cos(br));
+  const lo2=lo+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(la),Math.cos(d)-Math.sin(la)*Math.sin(la2));
+  return{lat:la2*180/Math.PI,lng:lo2*180/Math.PI}}
+/* siatka ~110m — identyfikator komórki świata (fundament pod multiplayer) */
+const CELL=0.001;
+const cellId=p=>Math.round(p.lat/CELL)+"_"+Math.round(p.lng/CELL);
+const cellCenter=id=>{const[a,b]=id.split("_").map(Number);return{lat:a*CELL,lng:b*CELL}};
+
+/* ---------------- świat: biomy / pogoda / czas ---------------- */
+const BIOMY={
+  las:     {n:"Las",       em:"🌲"},
+  woda:    {n:"Nad wodą",  em:"🌊"},
+  gory:    {n:"Góry",      em:"⛰️"},
+  miasto:  {n:"Miasto",    em:"🏙️"},
+  pole:    {n:"Pola",      em:"🌾"},
+  bagno:   {n:"Bagno",     em:"🪵"},
+  cmentarz:{n:"Cmentarz",  em:"⚰️"},
+  rownina: {n:"Równina",   em:"🍃"}
+};
+
+/* b = mnożnik siły. Zakres 0.85–1.15 wyznaczony symulacją ~9000 walk na pole:
+   0.85 ≈ pewna wygrana, 1.00 ≈ 85–95% wygranych, 1.15 ≈ wymaga mikstur.
+   Poza tym zakresem walki stają się albo trywialne, albo niemożliwe. */
+const MOBS={
+  las:[{n:"Wilk",em:"🐺",b:0.92},{n:"Dzik",em:"🐗",b:0.94},{n:"Leśny duch",em:"👻",b:0.99,t:"noc"},
+       {n:"Pająk",em:"🕷️",b:0.90},{n:"Niedźwiedź",em:"🐻",b:1.06,t:"dzien"}],
+  woda:[{n:"Utopiec",em:"🧟",b:0.96,t:"noc"},{n:"Wodnik",em:"🐸",b:0.92},{n:"Kraken młody",em:"🦑",b:1.08},
+        {n:"Czapla",em:"🦩",b:0.85}],
+  gory:[{n:"Kozioł skalny",em:"🐐",b:0.92},{n:"Harpia",em:"🦅",b:0.99},{n:"Troll górski",em:"🧌",b:1.10},
+        {n:"Golem",em:"🗿",b:1.15,t:"noc"}],
+  miasto:[{n:"Szczurołak",em:"🐀",b:0.87},{n:"Zbir",em:"🥷",b:0.94},{n:"Gargulec",em:"🦇",b:1.01,t:"noc"},
+          {n:"Kieszonkowiec",em:"🎭",b:0.90,t:"dzien"}],
+  pole:[{n:"Strach na wróble",em:"🎃",b:0.92,t:"noc"},{n:"Kruk",em:"🐦‍⬛",b:0.87},{n:"Żniwiarz",em:"🌾",b:0.99}],
+  bagno:[{n:"Mułowiec",em:"🫧",b:0.94},{n:"Jędza",em:"🧙‍♀️",b:1.04,t:"noc"},{n:"Ropucha",em:"🐸",b:0.90}],
+  cmentarz:[{n:"Szkielet",em:"💀",b:0.96},{n:"Zombie",em:"🧟‍♂️",b:0.99},{n:"Upiór",em:"👻",b:1.08,t:"noc"},
+            {n:"Kruk cmentarny",em:"🐦‍⬛",b:0.90}],
+  rownina:[{n:"Chochlik",em:"👺",b:0.90},{n:"Zdziczały pies",em:"🐕",b:0.92},{n:"Błędny ognik",em:"🔥",b:0.96,t:"noc"}]
+};
+
+/* --- stałe balansu (wyznaczone symulacją, patrz co-dalej.md) --- */
+const GROW=0.18;     // przyrost statystyk na poziom (proporcjonalny → klasy nie tracą tożsamości)
+const ARMK=60;       // stała pancerza: redukcja = def/(def+ARMK*g)
+const MOBARM=0.15;   // pancerz potwora
+const MHP=60;        // bazowe HP potwora na poziomie 1
+const MDMG=12.16;    // bazowe obrażenia potwora na poziomie 1
+const ELITA=1.25;    // mnożnik elity
+const gScale=l=>1+(l-1)*GROW;
+
+/* pogoda Open-Meteo WMO → efekt */
+function weatherOf(code){
+  if(code===0||code===1) return{n:"Bezchmurnie",em:"☀️",k:"clear",mob:1.0,rare:1.0};
+  if(code<=3) return{n:"Pochmurno",em:"☁️",k:"cloud",mob:1.0,rare:1.0};
+  if(code>=45&&code<=48) return{n:"Mgła",em:"🌫️",k:"fog",mob:1.15,rare:1.4};
+  if(code>=51&&code<=67) return{n:"Deszcz",em:"🌧️",k:"rain",mob:1.1,rare:1.25};
+  if(code>=71&&code<=77) return{n:"Śnieg",em:"❄️",k:"snow",mob:1.1,rare:1.3};
+  if(code>=80&&code<=82) return{n:"Ulewa",em:"🌧️",k:"rain",mob:1.2,rare:1.4};
+  if(code>=95) return{n:"Burza",em:"⛈️",k:"storm",mob:1.3,rare:2.0};
+  return{n:"Pogoda",em:"🌤️",k:"clear",mob:1,rare:1};
+}
+function seasonOf(d){const m=d.getMonth();
+  if(m<=1||m===11)return{n:"Zima",em:"❄️",k:"zima"};
+  if(m<=4)return{n:"Wiosna",em:"🌸",k:"wiosna"};
+  if(m<=7)return{n:"Lato",em:"☀️",k:"lato"};
+  return{n:"Jesień",em:"🍂",k:"jesien"};}
+function partOfDay(d){const h=d.getHours();
+  if(h>=6&&h<20)return{n:"Dzień",em:"🌞",k:"dzien"};
+  return{n:"Noc",em:"🌙",k:"noc"};}
+
+/* ---------------- klasy postaci ----------------
+   Bazy wyrównane symulacją: każda klasa ma podobny "power" (efektywne HP × DPS),
+   ale inny profil. Dłuższe walki premiują HP, więc rozpiętość musi być umiarkowana. */
+const KLASY={
+  wojownik:{n:"Wojownik",em:"⚔️",hp:56,atk:13,def:9,kryt:.08,
+    opis:"Najwięcej HP i obrony. Wybacza błędy, najlepszy przeciw elitom.",
+    ewo:[{n:"Rycerz",em:"🛡️"},{n:"Berserker",em:"🪓"}]},
+  lowca:{n:"Łowca",em:"🏹",hp:50,atk:14,def:7,kryt:.20,
+    opis:"Krytyk co piąty cios, najlepsza ucieczka. Uniwersalny.",
+    ewo:[{n:"Tropiciel",em:"🐾"},{n:"Snajper",em:"🎯"}]},
+  mag:{n:"Mag",em:"🔮",hp:46,atk:16,def:6,kryt:.13,
+    opis:"Największe obrażenia, najkrótsze walki. Kruchy przy elitach.",
+    ewo:[{n:"Arcymag",em:"🌀"},{n:"Nekromanta",em:"💀"}]}
+};
+
+/* ---------------- loot ---------------- */
+const RAR=[{n:"Zwykły",c:1,m:1.0},{n:"Niezwykły",c:2,m:1.35},{n:"Rzadki",c:3,m:1.8},
+           {n:"Epicki",c:4,m:2.5},{n:"Legendarny",c:5,m:3.5}];
+const BAZY=[
+  {n:"Miecz",em:"🗡️",slot:"bron",atk:3,def:0},
+  {n:"Topór",em:"🪓",slot:"bron",atk:4,def:-1},
+  {n:"Łuk",em:"🏹",slot:"bron",atk:3,def:0},
+  {n:"Kostur",em:"🪄",slot:"bron",atk:5,def:-2},
+  {n:"Tarcza",em:"🛡️",slot:"tarcza",atk:0,def:4},
+  {n:"Hełm",em:"⛑️",slot:"glowa",atk:0,def:2},
+  {n:"Zbroja",em:"🥼",slot:"tors",atk:0,def:3},
+  {n:"Amulet",em:"📿",slot:"amulet",atk:2,def:2}
+];
+function rollItem(r,lvl,rareBoost){
+  const base=pick(r,BAZY);
+  let roll=r()/Math.max(1,rareBoost);   // niższy roll = lepszy przedmiot
+  let ri_=0;
+  if(roll<0.02)ri_=4; else if(roll<0.08)ri_=3; else if(roll<0.22)ri_=2; else if(roll<0.50)ri_=1;
+  const rar=RAR[ri_];
+  const sc=(1+lvl*0.12)*rar.m;
+  return{id:Math.random().toString(36).slice(2,9),n:rar.n+" "+base.n.toLowerCase(),em:base.em,
+    slot:base.slot,rar:rar.c,
+    atk:Math.max(0,Math.round(base.atk*sc)),def:Math.max(0,Math.round(base.def*sc)),
+    val:Math.round((10+lvl*4)*rar.m)};
+}
+
+/* ---------------- stan gry ---------------- */
+const SAVE="georpg_v1";
+let S={
+  klasa:null,ewo:null,lvl:1,xp:0,hp:0,gold:20,mikst:3,
+  eq:{bron:null,tarcza:null,glowa:null,tors:null,amulet:null},
+  bag:[],dystans:0,zabite:0,quest:null,seen:{}
+};
+const xpNeed=l=>Math.round(45*Math.pow(1.22,l-1));
+/* skalowanie PROPORCJONALNE — kluczowe: gdyby przyrosty były stałe (+1.7 atk/poziom),
+   to na 30. poziomie mag i wojownik mieliby prawie identyczny atak i klasy przestałyby
+   się różnić. Mnożnik zachowuje proporcje przez całą grę. */
+function baseStats(){
+  const k=KLASY[S.klasa]||KLASY.wojownik, G=gScale(S.lvl);
+  return{hpMax:Math.round(k.hp*G),atk:Math.round(k.atk*G),
+         def:Math.round(k.def*G),kryt:k.kryt};
+}
+function stats(){
+  const b=baseStats();let atk=b.atk,def=b.def;
+  for(const s in S.eq){const it=S.eq[s];if(it){atk+=it.atk;def+=it.def}}
+  return{...b,atk,def};
+}
+/* redukcja obrażeń z malejącym zwrotem — stała ARMK skaluje się z poziomem,
+   dzięki czemu % redukcji nie rośnie w nieskończoność w late game */
+const armorOf=st=>st.def/(st.def+ARMK*gScale(S.lvl));
+
+function save(){try{localStorage.setItem(SAVE,JSON.stringify(S))}catch(e){}}
+function load(){try{const d=JSON.parse(localStorage.getItem(SAVE));if(d&&d.klasa){S=Object.assign(S,d);return true}}catch(e){}return false}
+
+/* ---------------- UI helpers ---------------- */
+const $=id=>document.getElementById(id);
+const UI={
+  cur:null,
+  show(id){document.querySelectorAll('.mask').forEach(m=>m.classList.remove('show'));
+    $(id).classList.add('show');this.cur=id},
+  close(){document.querySelectorAll('.mask').forEach(m=>m.classList.remove('show'));this.cur=null},
+  open(what){
+    if(what==='char')return this.charSheet();
+    if(what==='bag')return this.bagSheet();
+    if(what==='quest')return this.questSheet();
+    if(what==='help')return this.helpSheet();
+  },
+  generic(title,html){$('gTitle').textContent=title;$('gBody').innerHTML=html;this.show('m-generic')},
+  helpSheet(){
+    this.generic("Jak grać",`
+    <div class="howto">
+      <div><b>1.</b> Chodź — potwory pojawiają się wokół ciebie na mapie.</div>
+      <div><b>2.</b> Kliknij potwora, żeby zaatakować (bliżej niż 60 m).</div>
+      <div><b>3.</b> Bierz zadania 📜 — trzeba fizycznie dojść na miejsce.</div>
+      <div><b>4.</b> Zakładaj łup w plecaku 🎒 i rozwijaj postać.</div>
+    </div>
+    <p class="muted"><b>Świat jest prawdziwy.</b> Gra sprawdza w OpenStreetMap, na jakim
+    terenie stoisz (las, woda, cmentarz, miasto…) i dobiera do tego potwory. Pogoda
+    pochodzi z prawdziwej prognozy dla twojej lokalizacji.</p>
+    <p class="muted"><b>Noc</b> to inne potwory i +15% spawnów. <b>Burza</b> to +30% spawnów,
+    dwa razy więcej elit i wyraźnie lepszy łup. Warto wyjść w paskudną pogodę.</p>
+    <p class="muted"><b>Symulacja 🕹️</b> — dla grania bez GPS (albo przy komputerze).
+    Ruch klawiszami <kbd>WSAD</kbd> lub kliknięciem w mapę.</p>
+    <p class="muted"><b>Elity ✨</b> są mocne — przed walką miej mikstury. Ucieczka
+    zawsze jest opcją, łowca ucieka najskuteczniej.</p>
+    <p class="muted" style="border-top:1px solid var(--line);padding-top:10px">
+    Postęp zapisuje się w przeglądarce automatycznie.
+    <button class="x" style="float:right;font-size:12px;color:#f85149"
+      onclick="if(confirm('Skasować postać i zacząć od nowa?')){localStorage.removeItem('georpg_v1');location.reload()}">
+      Zacznij od nowa</button></p>`);
+  },
+  charSheet(){
+    const k=KLASY[S.klasa],st=stats(),nm=S.ewo?S.ewo:k.n;
+    let h=`<div style="text-align:center;font-size:46px">${S.ewo?evoEm():k.em}</div>
+    <div style="text-align:center;font-weight:600;margin-bottom:4px">${nm} · poz. ${S.lvl}</div>
+    <div class="stats">
+      <div class="stat">Życie<b>${Math.ceil(S.hp)} / ${st.hpMax}</b></div>
+      <div class="stat">Atak<b>${st.atk}</b></div>
+      <div class="stat">Obrona<b>${st.def}</b></div>
+      <div class="stat">Krytyk<b>${Math.round(st.kryt*100)}%</b></div>
+      <div class="stat">Doświadczenie<b>${S.xp} / ${xpNeed(S.lvl)}</b></div>
+      <div class="stat">Złoto<b>${S.gold}</b></div>
+      <div class="stat">Przejściowo<b>${(S.dystans/1000).toFixed(2)} km</b></div>
+      <div class="stat">Pokonanych<b>${S.zabite}</b></div>
+    </div>
+    <div class="muted" style="margin-bottom:8px">Założone:</div>`;
+    for(const s in S.eq){const it=S.eq[s];
+      h+=`<div class="item"><div class="em">${it?it.em:'▫️'}</div><div class="t">
+      <b class="${it?'rar'+it.rar:''}">${it?it.n:'— pusty —'}</b>
+      <small>${s}${it?` · +${it.atk} atk · +${it.def} obr`:''}</small></div>
+      ${it?`<button class="off" onclick="Inv.unequip('${s}')">Zdejmij</button>`:''}</div>`;}
+    if(S.lvl<10)h+=`<p class="muted">Ewolucja klasy na poziomie 10.</p>`;
+    this.generic("Postać",h);
+  },
+  bagSheet(){
+    let h=`<div class="item"><div class="em">🧪</div><div class="t"><b>Mikstura leczenia ×${S.mikst}</b>
+      <small>+40% maks. życia</small></div>
+      <button onclick="Inv.drink()">Wypij</button></div>`;
+    if(!S.bag.length)h+=`<p class="muted">Plecak pusty. Bij potwory.</p>`;
+    S.bag.forEach(it=>{h+=`<div class="item"><div class="em">${it.em}</div><div class="t">
+      <b class="rar${it.rar}">${it.n}</b><small>${it.slot} · +${it.atk} atk · +${it.def} obr · ${it.val} zł</small></div>
+      <button onclick="Inv.equip('${it.id}')">Załóż</button>
+      <button class="off" onclick="Inv.sell('${it.id}')">Sprzedaj</button></div>`});
+    this.generic("Plecak",h);
+  },
+  questSheet(){
+    let h;
+    if(!S.quest){
+      h=`<p class="muted">Brak aktywnego zadania. Zadania wymagają fizycznego dotarcia w miejsce
+      — 200–600 m od ciebie.</p>
+      <div class="acts"><button class="btn" onclick="Quest.gen()">📜 Weź zadanie</button></div>`;
+    }else{
+      const d=Game.pos?Math.round(dist(Game.pos,S.quest)):'?';
+      h=`<div class="item"><div class="em">${S.quest.em}</div><div class="t">
+      <b>${S.quest.title}</b><small>${S.quest.desc}</small></div></div>
+      <div class="stats"><div class="stat">Dystans<b>${d} m</b></div>
+      <div class="stat">Nagroda<b>${S.quest.xp} xp · ${S.quest.gold} zł</b></div></div>
+      <p class="muted">Cel oznaczony na mapie. Podejdź na mniej niż 30 m.</p>
+      <div class="acts"><button class="btn" onclick="Quest.drop()">🗑️ Porzuć</button></div>`;
+    }
+    this.generic("Zadanie",h);
+  }
+};
+function evoEm(){const k=KLASY[S.klasa];const e=k.ewo.find(x=>x.n===S.ewo);return e?e.em:k.em}
+let toastT;
+function toast(t,ms=1900){const el=$('toast');el.innerHTML=t;el.style.display='block';
+  clearTimeout(toastT);toastT=setTimeout(()=>el.style.display='none',ms)}
+
+function refreshHUD(){
+  const st=stats(),k=KLASY[S.klasa];
+  $('avatar').textContent=S.ewo?evoEm():(k?k.em:'🗡️');
+  $('pname').textContent=(S.ewo||(k?k.n:'Bohater'))+' · poz. '+S.lvl;
+  $('gold').textContent=S.gold+' zł';
+  $('hpb').style.width=Math.max(0,Math.min(100,S.hp/st.hpMax*100))+'%';
+  $('xpb').style.width=Math.min(100,S.xp/xpNeed(S.lvl)*100)+'%';
+  const w=World.state;
+  $('env').innerHTML=w?`
+    <div class="chip">${BIOMY[w.biom].em} <b>${BIOMY[w.biom].n}</b></div>
+    <div class="chip">${w.pora.em} <b>${w.pora.n}</b></div>
+    <div class="chip">${w.pogoda.em} <b>${w.pogoda.n}</b>${w.temp!=null?` ${Math.round(w.temp)}°`:''}</div>
+    <div class="chip">${w.sezon.em} <b>${w.sezon.n}</b></div>
+    <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>`:
+    `<div class="chip">📡 szukam sygnału…</div>`;
+}
+
+/* ---------------- World: biom + pogoda ---------------- */
+const World={
+  state:null,biomCache:{},lastWeather:0,weather:null,lastBiomCell:null,
+  async update(pos){
+    const now=new Date();
+    const biom=await this.biome(pos);
+    const wx=await this.weatherAt(pos);
+    this.state={biom,pogoda:weatherOf(wx.code),temp:wx.temp,
+      pora:partOfDay(now),sezon:seasonOf(now)};
+    refreshHUD();Spawner.refresh();
+  },
+  async weatherAt(pos){
+    if(this.weather&&Date.now()-this.lastWeather<10*60*1000)return this.weather;
+    try{
+      const u=`https://api.open-meteo.com/v1/forecast?latitude=${pos.lat.toFixed(3)}&longitude=${pos.lng.toFixed(3)}&current=temperature_2m,weather_code`;
+      const r=await fetch(u);const j=await r.json();
+      this.weather={code:j.current.weather_code,temp:j.current.temperature_2m};
+    }catch(e){this.weather={code:1,temp:null}}
+    this.lastWeather=Date.now();return this.weather;
+  },
+  async biome(pos){
+    const c=cellId(pos);
+    if(this.biomCache[c])return this.biomCache[c];
+    let b='rownina';
+    try{
+      const q=`[out:json][timeout:12];(way(around:160,${pos.lat},${pos.lng})["natural"];`+
+              `way(around:160,${pos.lat},${pos.lng})["landuse"];`+
+              `way(around:160,${pos.lat},${pos.lng})["amenity"="grave_yard"];`+
+              `relation(around:160,${pos.lat},${pos.lng})["natural"="water"];);out tags 40;`;
+      const r=await fetch("https://overpass-api.de/api/interpreter",{method:"POST",body:"data="+encodeURIComponent(q)});
+      const j=await r.json();
+      const score={las:0,woda:0,gory:0,miasto:0,pole:0,bagno:0,cmentarz:0};
+      (j.elements||[]).forEach(el=>{const t=el.tags||{};
+        if(t.natural==='water'||t.waterway)score.woda+=3;
+        if(t.natural==='wood'||t.landuse==='forest')score.las+=3;
+        if(t.natural==='wetland')score.bagno+=4;
+        if(['peak','cliff','scree','ridge','rock'].includes(t.natural))score.gory+=4;
+        if(['residential','commercial','industrial','retail'].includes(t.landuse))score.miasto+=2;
+        if(['farmland','meadow','grass','orchard','vineyard'].includes(t.landuse))score.pole+=2;
+        if(t.landuse==='cemetery'||t.amenity==='grave_yard')score.cmentarz+=6;
+      });
+      let best=null,bv=0;for(const k in score)if(score[k]>bv){bv=score[k];best=k}
+      if(best&&bv>=2)b=best;
+    }catch(e){/* offline / rate limit → równina */}
+    this.biomCache[c]=b;return b;
+  }
+};
+
+/* ---------------- Spawner: deterministyczny świat ---------------- */
+const Spawner={
+  markers:{},
+  /* bucket czasu: świat "odświeża się" co 20 min → ten sam gracz w tym samym
+     miejscu i czasie widzi to samo. Fundament pod serwer autorytatywny. */
+  bucket(){return Math.floor(Date.now()/(20*60*1000))},
+  refresh(){
+    if(!Game.pos||!World.state)return;
+    const B=this.bucket(),w=World.state,live={};
+    /* 3x3 komórki wokół gracza */
+    const base=cellId(Game.pos),[ca,cb]=base.split("_").map(Number);
+    for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){
+      const id=(ca+i)+"_"+(cb+j);
+      const c=cellCenter(id);
+      const r=rng(hash(id+"|"+B+"|"+w.pora.k+"|"+w.pogoda.k+"|"+w.sezon.k));
+      /* szansa spawnu zależna od pogody */
+      const chance=0.42*w.pogoda.mob*(w.pora.k==='noc'?1.15:1);
+      if(r()>chance)continue;
+      const pool=(MOBS[w.biom]||MOBS.rownina).filter(m=>!m.t||m.t===w.pora.k);
+      if(!pool.length)continue;
+      const m=pick(r,pool);
+      const lat=c.lat+(r()-0.5)*CELL*0.8, lng=c.lng+(r()-0.5)*CELL*0.8;
+      const key=id+"|"+B;
+      live[key]=true;
+      if(S.seen[key])continue;                  // już pokonany w tym cyklu
+      if(this.markers[key])continue;
+      const lvl=Math.max(1,S.lvl+ri(r,-1,1));
+      /* modyfikator elitarny — częstszy przy złej pogodzie */
+      const elite=r()<0.05*w.pogoda.rare;
+      const mob={key,n:(elite?"Elitarny ":"")+m.n,em:m.em,b:m.b*(elite?ELITA:1),lvl,elite,
+                 pos:{lat,lng},rareBoost:w.pogoda.rare*(elite?2:1)};
+      const mk=L.marker([lat,lng],{icon:L.divIcon({className:'',
+        html:`<div class="mob">${elite?'✨':''}${m.em}</div>`,iconSize:[34,34],iconAnchor:[17,17]})})
+        .addTo(Game.map).on('click',()=>Fight.start(mob));
+      mk._mob=mob;this.markers[key]=mk;
+    }
+    /* usuń stare bucket'y */
+    for(const k in this.markers){
+      if(!live[k]){Game.map.removeLayer(this.markers[k]);delete this.markers[k]}
+    }
+  },
+  kill(key){
+    S.seen[key]=1;
+    if(this.markers[key]){Game.map.removeLayer(this.markers[key]);delete this.markers[key]}
+  }
+};
+
+/* ---------------- Walka ---------------- */
+const Fight={
+  mob:null,mhp:0,mmax:0,busy:false,
+  start(mob){
+    if(!Game.pos)return;
+    const d=dist(Game.pos,mob.pos);
+    if(d>60){toast(`Za daleko — ${Math.round(d)} m.<br><span style="color:#8b949e">Podejdź bliżej niż 60 m.</span>`);return}
+    if(S.hp<=1){toast("Za mało życia. Wypij miksturę (🎒).");return}
+    this.mob=mob;
+    this.mmax=Math.round(MHP*mob.b*gScale(mob.lvl));this.mhp=this.mmax;
+    $('fEm').textContent=mob.em;$('fName').textContent=mob.n;
+    $('fSub').textContent=`poz. ${mob.lvl}${mob.elite?' · ELITA':''}`;
+    $('log').innerHTML='';this.line(`Napotykasz: <b>${mob.n}</b> (poz. ${mob.lvl}).`);
+    this.draw();UI.show('m-fight');this.busy=false;
+  },
+  line(t,c=''){const l=$('log');l.innerHTML+=`<div class="${c}">${t}</div>`;l.scrollTop=l.scrollHeight},
+  draw(){$('fHp').style.width=Math.max(0,this.mhp/this.mmax*100)+'%';refreshHUD()},
+  act(a){
+    if(this.busy||!this.mob)return;
+    if(a==='mikst'){if(S.mikst<=0){this.line("Brak mikstur.",'r');return}
+      Inv.drink();this.line("Wypijasz miksturę.",'g');this.enemyTurn();return}
+    const st=stats();
+    let hit=true,mult=1;
+    if(a==='silny'){hit=Math.random()<0.6;mult=2.1}
+    if(!hit){this.line("Chybiasz!",'r');this.enemyTurn();return}
+    const kryt=Math.random()<st.kryt;
+    let dmg=Math.round(st.atk*mult*(0.85+Math.random()*0.3)*(kryt?1.7:1)*(1-MOBARM));
+    dmg=Math.max(1,dmg);
+    this.mhp-=dmg;
+    this.line(`${kryt?'<b>KRYTYK!</b> ':''}Zadajesz <b>${dmg}</b> obrażeń.`,kryt?'y':'b');
+    this.draw();
+    if(this.mhp<=0)return this.win();
+    this.enemyTurn();
+  },
+  enemyTurn(){
+    this.busy=true;
+    setTimeout(()=>{
+      const st=stats(),m=this.mob;
+      const base=MDMG*(1+(m.b-1)*0.5)*gScale(m.lvl);
+      let dmg=Math.round(base*(0.8+Math.random()*0.4)*(1-armorOf(st)));
+      dmg=Math.max(1,dmg);
+      S.hp-=dmg;
+      this.line(`${m.n} zadaje <b>${dmg}</b> obrażeń.`,'r');
+      this.draw();
+      if(S.hp<=0)return this.lose();
+      this.busy=false;save();
+    },420);
+  },
+  tryFlee(){
+    if(!this.mob){UI.close();return}
+    const bonus=S.klasa==='lowca'?0.25:0;
+    if(Math.random()<0.55+bonus){this.line("Uciekasz.",'g');this.mob=null;setTimeout(()=>UI.close(),350)}
+    else{this.line("Ucieczka nieudana!",'r');this.enemyTurn()}
+  },
+  win(){
+    const m=this.mob,r=rng(hash(m.key+"loot"+Date.now()));
+    const xp=Math.round((9+m.lvl*6)*m.b), gold=Math.round((4+m.lvl*3)*m.b);
+    S.xp+=xp;S.gold+=gold;S.zabite++;
+    this.line(`<b>${m.n} pokonany!</b> +${xp} xp, +${gold} zł`,'g');
+    let drop=null;
+    if(Math.random()<0.35*m.rareBoost){drop=rollItem(r,S.lvl,m.rareBoost);S.bag.push(drop);
+      this.line(`Łup: <b class="rar${drop.rar}">${drop.n}</b>`,'y')}
+    if(Math.random()<0.25){S.mikst++;this.line("Znajdujesz miksturę 🧪",'y')}
+    Spawner.kill(m.key);this.mob=null;
+    while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;
+      const st=baseStats();S.hp=st.hpMax;
+      this.line(`<b>AWANS! Poziom ${S.lvl}</b> — życie odnowione.`,'g');
+      if(S.lvl===10&&!S.ewo)setTimeout(()=>Evo.offer(),700);
+    }
+    save();this.draw();
+    setTimeout(()=>{if(UI.cur==='m-fight')UI.close()},1400);
+  },
+  lose(){
+    const lost=Math.round(S.gold*0.15);S.gold-=lost;
+    const st=baseStats();S.hp=Math.round(st.hpMax*0.4);
+    this.line(`<b>Padłeś.</b> Tracisz ${lost} zł. Budzisz się z 40% życia.`,'r');
+    this.mob=null;save();this.draw();
+    setTimeout(()=>UI.close(),1800);
+  }
+};
+
+/* ---------------- ewolucja klasy ---------------- */
+const Evo={
+  offer(){
+    const k=KLASY[S.klasa];
+    let h=`<p class="muted">Poziom 10. Wybierz ścieżkę — na stałe.</p>`;
+    k.ewo.forEach(e=>{h+=`<div class="cls" onclick="Evo.pick('${e.n}')">
+      <div class="em">${e.em}</div><div><b>${e.n}</b></div></div>`});
+    UI.generic("Ewolucja klasy",h);
+  },
+  pick(n){S.ewo=n;save();refreshHUD();UI.close();toast(`Zostajesz: <b>${n}</b>`)}
+};
+
+/* ---------------- ekwipunek ---------------- */
+const Inv={
+  equip(id){const i=S.bag.findIndex(x=>x.id===id);if(i<0)return;const it=S.bag[i];
+    const old=S.eq[it.slot];S.eq[it.slot]=it;S.bag.splice(i,1);if(old)S.bag.push(old);
+    save();UI.bagSheet();refreshHUD();toast(`Założono: ${it.n}`)},
+  unequip(slot){const it=S.eq[slot];if(!it)return;S.bag.push(it);S.eq[slot]=null;
+    save();UI.charSheet();refreshHUD()},
+  sell(id){const i=S.bag.findIndex(x=>x.id===id);if(i<0)return;
+    S.gold+=S.bag[i].val;toast(`+${S.bag[i].val} zł`);S.bag.splice(i,1);save();UI.bagSheet();refreshHUD()},
+  drink(){if(S.mikst<=0){toast("Brak mikstur.");return}
+    const st=stats();S.mikst--;S.hp=Math.min(st.hpMax,S.hp+st.hpMax*0.4);
+    save();refreshHUD();if(UI.cur==='m-generic')UI.bagSheet()}
+};
+
+/* ---------------- questy ---------------- */
+const Quest={
+  marker:null,
+  gen(){
+    if(!Game.pos){toast("Brak pozycji.");return}
+    const r=rng(hash("q"+Date.now()));
+    const d=ri(r,200,600),brg=ri(r,0,359);
+    const p=offset(Game.pos,brg,d);
+    const kinds=[
+      {t:"Zwiad",e:"🚩",d:`Dotrzyj do punktu ${d} m stąd i rozejrzyj się.`},
+      {t:"Zaginiony wędrowiec",e:"🧭",d:"Ktoś zniknął w tej okolicy. Sprawdź to."},
+      {t:"Stary obelisk",e:"🗿",d:"Podobno stoi tam kamień z inskrypcją."},
+      {t:"Skrytka",e:"📦",d:"Zakopana skrzynia. Współrzędne przybliżone."}
+    ];
+    const k=pick(r,kinds);
+    S.quest={lat:p.lat,lng:p.lng,title:k.t,em:k.e,desc:k.d,
+      xp:Math.round(25+S.lvl*10),gold:Math.round(15+S.lvl*6)};
+    save();this.draw();UI.questSheet();
+  },
+  draw(){
+    if(this.marker){Game.map.removeLayer(this.marker);this.marker=null}
+    if(!S.quest)return;
+    this.marker=L.marker([S.quest.lat,S.quest.lng],{icon:L.divIcon({className:'',
+      html:`<div class="qm">${S.quest.em}</div>`,iconSize:[30,30],iconAnchor:[15,15]})}).addTo(Game.map);
+    L.circle([S.quest.lat,S.quest.lng],{radius:30,color:'#e3b341',weight:1,fillOpacity:.08})
+      .addTo(Game.map);
+  },
+  check(){
+    if(!S.quest||!Game.pos)return;
+    if(dist(Game.pos,S.quest)<30){
+      S.xp+=S.quest.xp;S.gold+=S.quest.gold;
+      toast(`<b>Zadanie ukończone!</b><br>+${S.quest.xp} xp · +${S.quest.gold} zł`,2600);
+      S.quest=null;
+      if(this.marker){Game.map.removeLayer(this.marker);this.marker=null}
+      Game.map.eachLayer(l=>{if(l instanceof L.Circle&&l.options.color==='#e3b341')Game.map.removeLayer(l)});
+      while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;S.hp=baseStats().hpMax}
+      save();refreshHUD();
+    }
+  },
+  drop(){S.quest=null;if(this.marker)Game.map.removeLayer(this.marker);
+    Game.map.eachLayer(l=>{if(l instanceof L.Circle&&l.options.color==='#e3b341')Game.map.removeLayer(l)});
+    save();UI.questSheet()}
+};
+
+/* ---------------- symulacja ruchu (desktop / brak GPS) ---------------- */
+const Sim={
+  on:false,keys:{},t:null,
+  toggle(){
+    this.on=!this.on;$('simBtn').classList.toggle('on',this.on);
+    if(this.on){
+      if(!Game.pos)Game.setPos({lat:52.2297,lng:21.0122},0,true); // Warszawa fallback
+      toast("Symulacja ON — <kbd>WSAD</kbd>/strzałki albo klik na mapę.",3000);
+      this.t=setInterval(()=>this.step(),160);
+    }else{clearInterval(this.t);toast("Symulacja OFF")}
+  },
+  step(){
+    if(!Game.pos)return;let dy=0,dx=0;
+    if(this.keys.w||this.keys.ArrowUp)dy=1; if(this.keys.s||this.keys.ArrowDown)dy=-1;
+    if(this.keys.a||this.keys.ArrowLeft)dx=-1; if(this.keys.d||this.keys.ArrowRight)dx=1;
+    if(!dx&&!dy)return;
+    const brg=(Math.atan2(dx,dy)*180/Math.PI+360)%360;
+    Game.setPos(offset(Game.pos,brg,8),5,false);
+  }
+};
+addEventListener('keydown',e=>{Sim.keys[e.key]=Sim.keys[e.key.toLowerCase()]=true});
+addEventListener('keyup',e=>{Sim.keys[e.key]=Sim.keys[e.key.toLowerCase()]=false});
+
+/* ---------------- Game ---------------- */
+const Game={
+  map:null,me:null,pos:null,lastT:0,follow:true,worldT:0,
+  init(){
+    this.map=L.map('map',{zoomControl:false,attributionControl:false}).setView([52.2297,21.0122],17);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(this.map);
+    this.map.on('dragstart',()=>this.follow=false);
+    this.map.on('click',e=>{if(Sim.on)this.setPos({lat:e.latlng.lat,lng:e.latlng.lng},5,false)});
+
+    if(load()){this.boot()}
+    else{
+      let h='';for(const k in KLASY){const c=KLASY[k];
+        h+=`<div class="cls" onclick="Game.chooseClass('${k}')"><div class="em">${c.em}</div>
+        <div><b>${c.n}</b><br><small class="muted">${c.opis}</small><br>
+        <small class="muted">HP ${c.hp} · ATK ${c.atk} · OBR ${c.def} · kryt ${Math.round(c.kryt*100)}%</small></div></div>`}
+      $('classList').innerHTML=h;UI.show('m-class');
+    }
+  },
+  chooseClass(k){S.klasa=k;S.hp=KLASY[k].hp;save();UI.close();this.boot()},
+  boot(){
+    if(!S.hp||S.hp<=0)S.hp=baseStats().hpMax;
+    refreshHUD();Quest.draw();
+    if(!navigator.geolocation){toast("Brak geolokalizacji — włączam symulację.");Sim.toggle();return}
+    navigator.geolocation.watchPosition(
+      p=>this.setPos({lat:p.coords.latitude,lng:p.coords.longitude},p.coords.accuracy,false),
+      e=>{toast("GPS niedostępny.<br><span style='color:#8b949e'>Włączam tryb symulacji — ruch na WSAD lub klik w mapę.</span>",4500);
+          if(!Sim.on)Sim.toggle()},
+      {enableHighAccuracy:true,maximumAge:5000,timeout:15000});
+    setInterval(()=>{if(this.pos)World.update(this.pos)},5*60*1000);
+    setInterval(()=>Spawner.refresh(),30*1000);
+  },
+  setPos(p,accuracy,silent){
+    const now=Date.now();
+    /* anty-teleport: odrzuć skoki > 150 m w < 3 s (prosty filtr, nie anty-cheat) */
+    if(this.pos&&!Sim.on){
+      const d=dist(this.pos,p),dt=(now-this.lastT)/1000;
+      if(d>150&&dt<3){return}
+      if(accuracy<50&&d>2&&d<200)S.dystans+=d;
+    }else if(this.pos&&Sim.on){
+      S.dystans+=dist(this.pos,p);
+    }
+    this.pos=p;this.lastT=now;
+    if(!this.me){
+      this.me=L.marker([p.lat,p.lng],{icon:L.divIcon({className:'',html:'<div class="me"></div>',
+        iconSize:[20,20],iconAnchor:[10,10]}),zIndexOffset:1000}).addTo(this.map);
+      this.map.setView([p.lat,p.lng],17);
+      World.update(p);
+    }else{
+      this.me.setLatLng([p.lat,p.lng]);
+      if(this.follow)this.map.panTo([p.lat,p.lng],{animate:true,duration:.3});
+    }
+    /* przeliczaj świat gdy zmieniamy komórkę */
+    const c=cellId(p);
+    if(c!==World.lastBiomCell){World.lastBiomCell=c;World.update(p)}
+    Quest.check();refreshHUD();
+    if(now-this.worldT>4000){this.worldT=now;Spawner.refresh();save()}
+  },
+  center(){this.follow=true;if(this.pos)this.map.setView([this.pos.lat,this.pos.lng],17)}
+};
+Game.init();
+</script>
+</body>
+</html>
