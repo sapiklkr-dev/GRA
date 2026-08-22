@@ -222,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="1.3";
+const WERSJA="1.4";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -773,9 +773,9 @@ function refreshHUD(){
    i budynki. Wynik siedzi w localStorage przez dobę. */
 /* Szablon zapytań w jednym miejscu — jego treść wyznacza klucz pamięci
    podręcznej, więc każda zmiana automatycznie unieważnia stare zapisy. */
-const LAND_TAGI='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|orchard|cemetery|allotments|village_green|recreation_ground)$';
-const NAT_TAGI='^(water|wood|wetland|scrub|heath|grassland|cliff|peak)$';
-const SZABLON_ZAPYTAN='poi1000/200+land700/120|'+LAND_TAGI+'|'+NAT_TAGI;
+const LAND_TAGI='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|cemetery)$';
+const NAT_TAGI='^(water|wood|wetland|grassland|peak)$';
+const SZABLON_ZAPYTAN='poi1000/200+land500/80|'+LAND_TAGI+'|'+NAT_TAGI;
 
 const OSM={
   R:1200,            // promień pobieranego obszaru
@@ -813,9 +813,9 @@ const OSM={
       `nwr(around:1000,${la},${lo})["craft"];`+
       `);out tags center 200;`;
     const qLand=`[out:json][timeout:12];(`+
-      `way(around:700,${la},${lo})["landuse"~"${LAND_TAGI}"];`+
-      `way(around:700,${la},${lo})["natural"~"${NAT_TAGI}"];`+
-      `);out tags center 120;`;
+      `way(around:500,${la},${lo})["landuse"~"${LAND_TAGI}"];`+
+      `way(around:500,${la},${lo})["natural"~"${NAT_TAGI}"];`+
+      `);out tags center 80;`;
     this.ostatnieZapytanie=qPoi;
     this.anchor=pos; this.land=[]; this.poi=[]; this.uciete=false;
     let udanePoi=false;
@@ -824,7 +824,7 @@ const OSM={
       udanePoi=true;
     }catch(e){ this.blad='miejsca: '+String(e.message||e).slice(0,40) }
     try{
-      this.dopisz(await this.pytaj(qLand,'teren'), 120);
+      this.dopisz(await this.pytaj(qLand,'teren'), 80);
     }catch(e){ if(!this.blad) this.blad='teren: '+String(e.message||e).slice(0,40) }
     try{
       this.stan = (udanePoi||this.land.length) ? 'ok' : 'błąd';
@@ -855,13 +855,12 @@ const OSM={
   SERWERY:[
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
-    'https://overpass.osm.ch/api/interpreter',
-    'https://overpass.openstreetmap.ru/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
-    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+    'https://overpass.osm.jp/api/interpreter',
+    'https://overpass.openstreetmap.fr/api/interpreter'
   ],
   proby:[], LIMIT_MS:13000,
-  async pytaj(q, etykieta){
+  async pytaj(q, etykieta, dopuscPusto){
     let ostatni=null;
     for(const url of this.SERWERY){
       const t0=Date.now();
@@ -874,6 +873,13 @@ const OSM={
         if(!r.ok) throw new Error('HTTP '+r.status);
         const j=await r.json();
         const ile=(j.elements||[]).length;
+        /* Pusta odpowiedź to najczęściej instancja regionalna, która nie ma
+           danych dla naszego obszaru — nie kończymy na niej szukania. */
+        if(ile===0 && !dopuscPusto){
+          this.proby.push({url:url.split('/')[2], etyk:etykieta, ok:false, ms:Date.now()-t0,
+            blad:'0 obiektów (brak danych dla regionu?)'});
+          ostatni='puste odpowiedzi'; continue;
+        }
         this.proby.push({url:url.split('/')[2], etyk:etykieta, ok:true, ms:Date.now()-t0, ile});
         return j;
       }catch(e){
@@ -925,7 +931,15 @@ const OSM={
     }
     let best=null,bv=0;
     for(const k in sc) if(sc[k]>bv){bv=sc[k];best=k}
-    return best||'rownina';
+    if(best) return best;
+    /* Zapasowo: jeśli pobranie terenu padło, ale w pobliżu jest sporo sklepów
+       i knajp, to na pewno nie jest to szczere pole. Gęstość miejsc mówi
+       o zabudowie wystarczająco dużo, żeby nie pokazywać "Równiny" w centrum. */
+    let blisko=0;
+    for(const [la,lo] of this.poi)
+      if(dist(pos,{lat:la,lng:lo})<400) blisko++;
+    if(blisko>=8) return 'miasto';
+    return 'rownina';
   }
 };
 
