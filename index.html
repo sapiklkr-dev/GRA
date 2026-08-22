@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 1.8</title>
+<title>GeoRPG 1.9</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -222,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="1.8";
+const WERSJA="1.9";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -770,13 +770,13 @@ function refreshHUD(){
    Poprzednio gra pytała Overpass o teren przy każdej zmianie komórki (co 110 m).
    Przy zwykłym spacerze to dziesiątki zapytań na minutę — publiczny serwer
    odcinał je limitem i teren zawsze wychodził "Równina".
-   Teraz: JEDNO zapytanie na obszar 1,2 km, z którego lokalnie liczymy i biom,
-   i budynki. Wynik siedzi w localStorage przez dobę. */
+   Teraz: JEDNO zapytanie na okolicę, z dwoma osobnymi limitami wyników,
+   z którego lokalnie liczymy i teren, i budynki. Wynik trzymamy 7 dni. */
 /* Szablon zapytań w jednym miejscu — jego treść wyznacza klucz pamięci
    podręcznej, więc każda zmiana automatycznie unieważnia stare zapisy. */
 const LAND_TAGI='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|cemetery)$';
 const NAT_TAGI='^(water|wood|wetland|grassland|peak)$';
-const SZABLON_ZAPYTAN='poi1000/200+land500/80|klas2|'+LAND_TAGI+'|'+NAT_TAGI;
+const SZABLON_ZAPYTAN='jedno-zapytanie-2xout|poi1000/200|land500/80|klas2|'+LAND_TAGI+'|'+NAT_TAGI;
 
 const OSM={
   R:1200,            // promień pobieranego obszaru
@@ -805,30 +805,28 @@ const OSM={
     }catch(e){}
     this.czekaj=true; this.stan='pobieram…'; this.proby=[]; refreshHUD();
     const la=pos.lat.toFixed(4), lo=pos.lng.toFixed(4);
-    /* Dwa OSOBNE, lekkie zapytania zamiast jednego ciężkiego. Budynki są
-       ważniejsze (bez nich nie ma handlu ani zleceń), więc lecą pierwsze —
-       jeśli teren się nie dociągnie, gra i tak działa. */
-    const qPoi=`[out:json][timeout:12];(`+
-      `nwr(around:1000,${la},${lo})["amenity"~"^(pub|bar|restaurant|cafe|fast_food)$"];`+
+    /* JEDNO zapytanie, DWA wyniki. Rozbicie na dwa osobne żądania rozwiązało
+       problem wspólnego limitu 250 obiektów, ale stworzyło nowy: drugie
+       żądanie wysłane zaraz po pierwszym dostawało HTTP 429 (za dużo zapytań).
+       Overpass pozwala wypisać kilka zestawów w jednym zapytaniu — każdy
+       z własnym limitem — więc mamy jedno połączenie i oba limity osobno. */
+    const q=`[out:json][timeout:25];`+
+      `(nwr(around:1000,${la},${lo})["amenity"~"^(pub|bar|restaurant|cafe|fast_food)$"];`+
       `nwr(around:1000,${la},${lo})["shop"];`+
-      `nwr(around:1000,${la},${lo})["craft"];`+
-      `);out tags center 200;`;
-    const qLand=`[out:json][timeout:12];(`+
-      `way(around:500,${la},${lo})["landuse"~"${LAND_TAGI}"];`+
-      `way(around:500,${la},${lo})["natural"~"${NAT_TAGI}"];`+
-      `);out tags center 80;`;
-    this.ostatnieZapytanie=qPoi;
+      `nwr(around:1000,${la},${lo})["craft"];);`+
+      `out tags center 200;`+
+      `(way(around:500,${la},${lo})["landuse"~"${LAND_TAGI}"];`+
+      `way(around:500,${la},${lo})["natural"~"${NAT_TAGI}"];);`+
+      `out tags center 80;`;
+    this.ostatnieZapytanie=q;
     this.anchor=pos; this.land=[]; this.poi=[]; this.uciete=false;
     let udanePoi=false;
     try{
-      this.dopisz(await this.pytaj(qPoi,'miejsca',false,20000), 200);   // miejsca bywają wolne
-      udanePoi=true;
-    }catch(e){ this.blad='miejsca: '+String(e.message||e).slice(0,40) }
+      this.dopisz(await this.pytaj(q,'mapa',false,25000));
+      udanePoi=this.poi.length>0;
+    }catch(e){ this.blad=String(e.message||e).slice(0,50) }
     try{
-      this.dopisz(await this.pytaj(qLand,'teren',false,13000), 80);
-    }catch(e){ if(!this.blad) this.blad='teren: '+String(e.message||e).slice(0,40) }
-    try{
-      this.stan = (udanePoi||this.land.length) ? 'ok' : 'błąd';
+      this.stan = (this.poi.length||this.land.length) ? 'ok' : 'błąd';
       if(this.stan==='ok') this.blad=null;
       /* pustego wyniku nie zapisujemy — inaczej jedna nieudana odpowiedź
          blokowałaby okolicę na dobę */
