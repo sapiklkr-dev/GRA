@@ -210,7 +210,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="0.6";
+const WERSJA="0.7";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -598,6 +598,8 @@ const UI={
     if(S.lvl<10)h+=`<p class="muted">Ewolucja klasy na poziomie 10.</p>`;
     h+=`<div class="acts" style="margin-top:10px">
       <button class="btn" onclick="UI.helpSheet()">❓ Jak grać</button>
+      <button class="btn" onclick="diagnostyka()">🩺 Diagnostyka</button></div>
+      <div class="acts" style="margin-top:6px">
       <button class="btn" onclick="zglosUwage()">✍️ Zgłoś uwagę</button></div>`;
     this.generic("Postać",h);
   },
@@ -641,6 +643,52 @@ const UI={
 function evoEm(){const k=KLASY[S.klasa];const e=k.ewo.find(x=>x.n===S.ewo);return e?e.em:k.em}
 /* Stopka diagnostyczna — mówi wprost, czy wczytała się aktualna wersja
    i czy grafiki są na miejscu. Bez tego "nie widzę ikon" to zgadywanka. */
+/* Ekran diagnostyczny — pokazuje wprost, co odpowiedział każdy serwer map.
+   Bez tego "nie działa" to zgadywanka po obu stronach. */
+function diagnostyka(){
+  const w=World.state;
+  let h=`<div class="stats">
+    <div class="stat">Wersja<b>${WERSJA}</b></div>
+    <div class="stat">Stan mapy<b style="color:${OSM.stan==='ok'?'var(--xp)':'var(--hp)'}">${OSM.stan}</b></div>
+    <div class="stat">Terenów<b>${OSM.land.length}</b></div>
+    <div class="stat">Miejsc (POI)<b>${OSM.poi.length}</b></div>
+    <div class="stat">Budynków<b>${Bud.lista?Bud.lista.length:0}</b></div>
+    <div class="stat">Pozycja<b style="font-size:11px">${Game.pos?Game.pos.lat.toFixed(4)+', '+Game.pos.lng.toFixed(4):'brak'}</b></div>
+  </div>`;
+  if(OSM.blad) h+=`<p class="muted" style="color:var(--hp)">Ostatni błąd: ${OSM.blad}</p>`;
+  h+=`<div class="sfhdr"><span>Serwery map</span><small>ostatnia próba</small></div>`;
+  if(!OSM.proby.length) h+=`<p class="muted">Jeszcze nie odpytywano.</p>`;
+  OSM.proby.forEach(p=>{
+    h+=`<div class="item"><div class="em">${p.ok?'✅':'❌'}</div><div class="t">
+      <b style="font-size:12px">${p.url}</b>
+      <small>${p.ok?`zwrócił ${p.ile} obiektów`:p.blad} · ${p.ms} ms</small></div></div>`;
+  });
+  if(OSM.poi.length){
+    h+=`<div class="sfhdr"><span>Znalezione miejsca</span><small>${OSM.poi.length}</small></div>`;
+    OSM.poi.slice(0,12).forEach(([la,lo,r,n])=>{
+      const d=Game.pos?Math.round(dist(Game.pos,{lat:la,lng:lo})):'?';
+      h+=`<div class="item"><div class="em">${RODZAJE[r]?RODZAJE[r].em:'📍'}</div>
+        <div class="t"><b style="font-size:12px">${n||'(bez nazwy)'}</b>
+        <small>${r} · ${d} m</small></div></div>`;
+    });
+  }
+  h+=`<div class="acts" style="margin-top:10px">
+    <button class="btn" onclick="OSM.ponow()">🔄 Pobierz mapę od nowa</button>
+    <button class="btn" onclick="diagKopiuj()">📋 Kopiuj raport</button></div>`;
+  UI.generic('Diagnostyka', h);
+}
+function diagKopiuj(){
+  const r=['GeoRPG '+WERSJA,
+   'pozycja: '+(Game.pos?Game.pos.lat.toFixed(4)+','+Game.pos.lng.toFixed(4):'brak'),
+   'stan: '+OSM.stan+(OSM.blad?' ('+OSM.blad+')':''),
+   'teren: '+OSM.land.length+', POI: '+OSM.poi.length+', budynki: '+(Bud.lista?Bud.lista.length:0),
+   'serwery: '+OSM.proby.map(p=>p.url+'='+(p.ok?p.ile+' obj':p.blad)+' '+p.ms+'ms').join(' | ')
+  ].join('\n');
+  if(navigator.clipboard) navigator.clipboard.writeText(r).then(()=>toast('📋 Raport skopiowany'));
+  else UI.generic('Raport',`<textarea style="width:100%;height:180px;background:#0d1117;
+    color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px;font-size:11px">${r}</textarea>`);
+}
+
 /* Zbiera kontekst techniczny razem z uwagą — inaczej dostaniesz "nie działa"
    bez informacji, na czym i w jakiej wersji. */
 function zglosUwage(){
@@ -739,11 +787,9 @@ const OSM={
       `nwr(around:${R},${la},${lo})["shop"];`+
       `nwr(around:${R},${la},${lo})["craft"];`+
       `);out tags center 250;`;
+    this.ostatnieZapytanie=q;
     try{
-      const r=await fetch('https://overpass-api.de/api/interpreter',
-        {method:'POST',body:'data='+encodeURIComponent(q)});
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      const j=await r.json();
+      const j=await this.pytaj(q);
       this.parsuj(j, pos);
       this.stan='ok';
       this.blad=null;
@@ -758,6 +804,44 @@ const OSM={
       this.blokadaDo=Date.now()+60000;      // nie dobijaj serwera po błędzie
     }
     this.czekaj=false; refreshHUD(); Bud.rysuj(); Spawner.refresh();
+    if(this.stan==='ok' && !this.poi.length)
+      toast('🗺️ Brak sklepów i knajp w promieniu 1,2 km<br><span style="color:#8b949e">stawiam obozowisko i wędrownego kupca</span>',3000);
+    if(this.stan==='błąd')
+      toast('🗺️ <b>Nie udało się pobrać mapy</b><br><span style="color:#8b949e">Postać → 🩺 Diagnostyka pokaże szczegóły</span>',3600);
+  },
+
+  /* Publiczne instancje Overpass bywają przeciążone i odpowiadają błędem
+     429 (za dużo zapytań) albo 504 (przekroczony czas). Próbujemy kolejno
+     kilku, zamiast poddawać się po pierwszej. */
+  SERWERY:[
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.osm.jp/api/interpreter'
+  ],
+  proby:[],
+  async pytaj(q){
+    this.proby=[];
+    let ostatni=null;
+    for(const url of this.SERWERY){
+      const t0=Date.now();
+      try{
+        const ac=new AbortController();
+        const stoper=setTimeout(()=>ac.abort(), 25000);
+        const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(q),signal:ac.signal});
+        clearTimeout(stoper);
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        const j=await r.json();
+        const ile=(j.elements||[]).length;
+        this.proby.push({url:url.split('/')[2], ok:true, ms:Date.now()-t0, ile});
+        return j;
+      }catch(e){
+        const p=String(e.name==='AbortError'?'przekroczony czas':(e.message||e)).slice(0,40);
+        this.proby.push({url:url.split('/')[2], ok:false, ms:Date.now()-t0, blad:p});
+        ostatni=p;
+      }
+    }
+    throw new Error(ostatni||'wszystkie serwery zawiodły');
   },
 
   parsuj(j,pos){
@@ -784,6 +868,12 @@ const OSM={
     });
   },
 
+  ponow(){
+    this.anchor=null; this.blokadaDo=0; this.czekaj=false; this.stan='pobieram…';
+    try{ localStorage.removeItem(this.klucz(Game.pos||{lat:0,lng:0})) }catch(e){}
+    refreshHUD();
+    this.ensure(Game.pos||{lat:0,lng:0}).then(()=>{ diagnostyka(); Bud.rysuj() });
+  },
   /* biom = przewaga terenów w promieniu 220 m, ważona odwrotnie odległością */
   biome(pos){
     const sc={};
