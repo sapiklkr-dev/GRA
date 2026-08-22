@@ -171,8 +171,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
   <p class="muted"><b>Nie masz GPS albo siedzisz przy kompie?</b> Kliknij
   <b>🕹️ Symulacja</b> na dole — poruszasz się wtedy klawiszami <kbd>WSAD</kbd>
   lub klikając w mapę. Teren, pogoda i pora dnia nadal są prawdziwe.</p>
-  <p class="muted" style="border-top:1px solid var(--line);padding-top:10px;margin-bottom:8px">
-  Wybierz klasę — na 10. poziomie rozwinie się w jedną z dwóch ścieżek:</p>
+  <p class="muted" id="wersja" style="border-top:1px solid var(--line);padding-top:10px;margin-bottom:8px"></p>
   <div id="classList"></div>
 </div></div>
 
@@ -206,6 +205,10 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
           → deterministyczny spawn → walka turowa → loot → progresja
    Brak backendu. Save w localStorage. Multiplayer/Strava = poza zakresem.
    ===================================================================== */
+
+/* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
+   nie serwuje starego pliku z pamięci podręcznej. */
+const WERSJA="0.3";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -522,7 +525,8 @@ const UI={
   },
   bestSheet(){
     const zn=S.bestia||{}, ile=Object.keys(zn).length;
-    let h=`<p class="muted">Odkryto <b>${ile}</b> z <b>${BEST.length}</b> gatunków.
+    let h=`<p class="muted">${stopka()}</p>
+    <p class="muted">Odkryto <b>${ile}</b> z <b>${BEST.length}</b> gatunków.
     Każdy może wystąpić z przydomkiem (Wściekły, Prastary…) i w wyższej randze
     — ❰❱ alfa, ✨ elita, 👑 prastary pan.</p>`;
     for(const sk in SFERY){
@@ -615,6 +619,14 @@ const UI={
   }
 };
 function evoEm(){const k=KLASY[S.klasa];const e=k.ewo.find(x=>x.n===S.ewo);return e?e.em:k.em}
+/* Stopka diagnostyczna — mówi wprost, czy wczytała się aktualna wersja
+   i czy grafiki są na miejscu. Bez tego "nie widzę ikon" to zgadywanka. */
+function stopka(){
+  const g=(window.EMB&&EMB.mobs)?Object.keys(EMB.mobs).length:0;
+  return `wersja <b>${WERSJA}</b> · gatunków: <b>${BEST.length}</b> · `+
+    (g?`grafiki wbudowane: <b style="color:var(--xp)">${g}</b>`
+      :`grafiki wbudowane: <b style="color:var(--hp)">BRAK</b>`);
+}
 let toastT;
 function toast(t,ms=1900){const el=$('toast');el.innerHTML=t;el.style.display='block';
   clearTimeout(toastT);toastT=setTimeout(()=>el.style.display='none',ms)}
@@ -963,7 +975,10 @@ const Game={
         h+=`<div class="cls" onclick="Game.chooseClass('${k}')"><div class="em">${c.em}</div>
         <div><b>${c.n}</b><br><small class="muted">${c.opis}</small><br>
         <small class="muted">HP ${c.hp} · ATK ${c.atk} · OBR ${c.def} · kryt ${Math.round(c.kryt*100)}%</small></div></div>`}
-      $('classList').innerHTML=h;UI.show('m-class');
+      $('classList').innerHTML=h;
+      $('wersja').innerHTML=stopka()+
+        '<br>Wybierz klasę — na 10. poziomie rozwinie się w jedną z dwóch ścieżek:';
+      UI.show('m-class');
     }
   },
   chooseClass(k){S.klasa=k;S.hp=KLASY[k].hp;save();UI.close();this.boot()},
