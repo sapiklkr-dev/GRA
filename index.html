@@ -210,7 +210,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="0.4";
+const WERSJA="0.5";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -488,7 +488,7 @@ const SAVE="georpg_v1";
 let S={
   klasa:null,ewo:null,lvl:1,xp:0,hp:0,gold:20,mikst:3,
   eq:{bron:null,tarcza:null,glowa:null,tors:null,amulet:null},
-  bag:[],dystans:0,zabite:0,quest:null,seen:{}
+  bag:[],dystans:0,zabite:0,questy:[],kupione:{},seen:{}
 };
 const xpNeed=l=>Math.round(45*Math.pow(1.22,l-1));
 /* skalowanie PROPORCJONALNE — kluczowe: gdyby przyrosty były stałe (+1.7 atk/poziom),
@@ -509,7 +509,11 @@ function stats(){
 const armorOf=st=>st.def/(st.def+ARMK*gScale(S.lvl));
 
 function save(){try{localStorage.setItem(SAVE,JSON.stringify(S))}catch(e){}}
-function load(){try{const d=JSON.parse(localStorage.getItem(SAVE));if(d&&d.klasa){S=Object.assign(S,d);return true}}catch(e){}return false}
+function load(){try{const d=JSON.parse(localStorage.getItem(SAVE));if(d&&d.klasa){
+  S=Object.assign(S,d);
+  if(!Array.isArray(S.questy))S.questy=[];   // migracja ze starej wersji (jedno zadanie)
+  S.kupione=S.kupione||{}; delete S.quest;
+  return true}}catch(e){}return false}
 
 /* ---------------- UI helpers ---------------- */
 const $=id=>document.getElementById(id);
@@ -563,7 +567,10 @@ const UI={
     <p class="muted"><b>Elity ✨</b> są mocne — przed walką miej mikstury. Ucieczka
     zawsze jest opcją, łowca ucieka najskuteczniej.</p>
     <p class="muted" style="border-top:1px solid var(--line);padding-top:10px">
-    Postęp zapisuje się w przeglądarce automatycznie.
+    <b>Testujesz wersję roboczą.</b> Napisz, co Cię wkurza albo nudzi —
+    to najcenniejsza rzecz, jaką możesz teraz dać.</p>
+    <div class="acts"><button class="btn" onclick="zglosUwage()">✍️ Zgłoś uwagę</button></div>
+    <p class="muted" style="margin-top:10px">Postęp zapisuje się w przeglądarce automatycznie.
     <button class="x" style="float:right;font-size:12px;color:#f85149"
       onclick="if(confirm('Skasować postać i zacząć od nowa?')){localStorage.removeItem('georpg_v1');location.reload()}">
       Zacznij od nowa</button></p>`);
@@ -589,6 +596,9 @@ const UI={
       <small>${s}${it?` · +${it.atk} atk · +${it.def} obr`:''}</small></div>
       ${it?`<button class="off" onclick="Inv.unequip('${s}')">Zdejmij</button>`:''}</div>`;}
     if(S.lvl<10)h+=`<p class="muted">Ewolucja klasy na poziomie 10.</p>`;
+    h+=`<div class="acts" style="margin-top:10px">
+      <button class="btn" onclick="UI.helpSheet()">❓ Jak grać</button>
+      <button class="btn" onclick="zglosUwage()">✍️ Zgłoś uwagę</button></div>`;
     this.generic("Postać",h);
   },
   bagSheet(){
@@ -604,25 +614,55 @@ const UI={
   },
   questSheet(){
     let h;
-    if(!S.quest){
-      h=`<p class="muted">Brak aktywnego zadania. Zadania wymagają fizycznego dotarcia w miejsce
-      — 200–600 m od ciebie.</p>
-      <div class="acts"><button class="btn" onclick="Quest.gen()">📜 Weź zadanie</button></div>`;
+    if(!S.questy.length){
+      h=`<p class="muted">Nie masz zadań. Zlecenia znajdziesz w 🍺 <b>karczmie</b>
+      — na mapie stoi na prawdziwym pubie albo barze w okolicy.</p>
+      <p class="muted">Możesz prowadzić do trzech zadań naraz.</p>`;
     }else{
-      const d=Game.pos?Math.round(dist(Game.pos,S.quest)):'?';
-      h=`<div class="item"><div class="em">${S.quest.em}</div><div class="t">
-      <b>${S.quest.title}</b><small>${S.quest.desc}</small></div></div>
-      <div class="stats"><div class="stat">Dystans<b>${d} m</b></div>
-      <div class="stat">Nagroda<b>${S.quest.xp} xp · ${S.quest.gold} zł</b></div></div>
-      <p class="muted">Cel oznaczony na mapie. Podejdź na mniej niż 30 m.</p>
-      <div class="acts"><button class="btn" onclick="Quest.drop()">🗑️ Porzuć</button></div>`;
+      h=`<p class="muted">Zadania <b>${S.questy.length}/3</b>. Postęp liczy się sam
+      podczas gry.</p>`;
+      S.questy.forEach(q=>{
+        const proc=Math.min(100,Math.round(q.postep/q.ile*100));
+        let dod='';
+        if(q.typ==='wyprawa'&&q.lat&&Game.pos)
+          dod=` · ${Math.round(dist(Game.pos,{lat:q.lat,lng:q.lng}))} m stąd`;
+        if(q.typ==='krajoznawcze'&&q.odwiedzone&&q.odwiedzone.length)
+          dod=' · '+q.odwiedzone.map(b=>BIOMY[b]?BIOMY[b].em:'').join(' ');
+        h+=`<div class="item"><div class="em">${q.em}</div><div class="t">
+          <b>${q.tytul}</b><small>${q.opis}${dod}</small>
+          <div class="bar xp" style="margin-top:5px"><i style="width:${proc}%"></i></div>
+          <small>${q.postep}/${q.ile} · nagroda ${q.xp} xp · ${q.gold} zł</small></div>
+          <button class="off" onclick="Quest.porzuc('${q.kod}')">Porzuć</button></div>`;
+      });
     }
-    this.generic("Zadanie",h);
+    this.generic("Zadania",h);
   }
 };
 function evoEm(){const k=KLASY[S.klasa];const e=k.ewo.find(x=>x.n===S.ewo);return e?e.em:k.em}
 /* Stopka diagnostyczna — mówi wprost, czy wczytała się aktualna wersja
    i czy grafiki są na miejscu. Bez tego "nie widzę ikon" to zgadywanka. */
+/* Zbiera kontekst techniczny razem z uwagą — inaczej dostaniesz "nie działa"
+   bez informacji, na czym i w jakiej wersji. */
+function zglosUwage(){
+  const w=World.state;
+  const kontekst=[
+    'wersja '+WERSJA,
+    'poziom '+S.lvl+' '+(S.klasa||'?'),
+    'zabitych '+S.zabite,
+    'dystans '+(S.dystans/1000).toFixed(1)+' km',
+    w?('teren '+w.biom+', '+w.pora.k+', '+w.pogoda.k):'brak danych świata',
+    'OSM '+OSM.stan+', budynków '+(Bud.lista?Bud.lista.length:0),
+    'zadania '+S.questy.length
+  ].join(' | ');
+  const tresc='Moja uwaga:\n\n\n---\n'+kontekst;
+  navigator.clipboard&&navigator.clipboard.writeText(tresc).then(()=>{
+    toast('📋 Skopiowano do schowka<br><span style="color:#8b949e">Wklej Karolowi na czacie</span>',3400);
+  }).catch(()=>{
+    UI.generic('Zgłoś uwagę',`<p class="muted">Skopiuj i wyślij:</p>
+      <textarea style="width:100%;height:150px;background:#0d1117;color:#e6edf3;
+      border:1px solid #30363d;border-radius:8px;padding:8px;font-size:12px">${tresc}</textarea>`);
+  });
+}
 function stopka(){
   const g=(window.EMB&&EMB.mobs)?Object.keys(EMB.mobs).length:0;
   return `wersja <b>${WERSJA}</b> · gatunków: <b>${BEST.length}</b> · `+
@@ -647,7 +687,9 @@ function refreshHUD(){
     <div class="chip">${w.pogoda.em} <b>${w.pogoda.n}</b>${w.temp!=null?` ${Math.round(w.temp)}°`:''}</div>
     <div class="chip">${w.sezon.em} <b>${w.sezon.n}</b></div>
     <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>
-    <div class="chip">🗺️ <b>${OSM.stan}</b>${OSM.poi.length?` · ${Bud.lista.length} bud.`:''}</div>`:
+    <div class="chip">🗺️ <b>${OSM.stan}</b>${OSM.poi.length?` · ${Bud.lista.length} bud.`:''}</div>
+    ${Predkosc.akt>8?`<div class="chip" style="${Predkosc.jedzie()?'border-color:var(--hp);color:var(--hp)':''}">
+      ${Predkosc.jedzie()?'🚗':'🏃'} <b>${Math.round(Predkosc.akt)} km/h</b>${Predkosc.jedzie()?' · zablokowane':''}</div>`:''}`:
     `<div class="chip">📡 szukam sygnału…</div>`;
 }
 
@@ -747,8 +789,10 @@ const World={
     await OSM.ensure(pos);
     const biom=OSM.biome(pos);
     const wx=await this.weatherAt(pos);
+    const poprz=this.state?this.state.biom:null;
     this.state={biom,pogoda:weatherOf(wx.code),temp:wx.temp,
       pora:partOfDay(now),sezon:seasonOf(now)};
+    if(biom!==poprz) Quest.poZmianieTerenu(biom);
     refreshHUD();Spawner.refresh();
   },
   async weatherAt(pos){
@@ -817,6 +861,7 @@ const Bud={
       if(!zyje[k]){ Game.map.removeLayer(this.markery[k]); delete this.markery[k] }
   },
   wejdz(b){
+    if(blokadaJazdy())return;
     const d=Game.pos?Math.round(dist(Game.pos,b)):999;
     const R=RODZAJE[b.rodzaj];
     if(d>ZASIEG_BUD){
@@ -824,13 +869,136 @@ const Bud={
         <span style="color:#8b949e">podejdź na ${ZASIEG_BUD} m</span>`,2600);
       return;
     }
-    UI.generic(b.nazwa||R.n, `
-      <div style="text-align:center;font-size:44px">${icon(R.em,'ui',b.rodzaj,56)}</div>
-      <p class="muted" style="text-align:center">${R.opis}</p>
-      <p class="muted">Wnętrze budynku powstaje w kolejnym kroku —
-      handel, ulepszanie i tablica zleceń. Na razie możesz tu tylko zajrzeć.</p>`);
+    this.aktualny=b;
+    if(b.rodzaj==='karczma'||b.rodzaj==='obozowisko') return Karczma.otworz(b);
+    if(b.rodzaj==='kowal') return Kowal.otworz(b);
+    return Sklep.otworz(b);
   }
 };
+
+/* ================= EKONOMIA =================
+   Ceny NIE są zgadnięte — wynikają z symulacji przychodu. Gracz zarabia
+   ok. (155 + 82 × poziom) złota na godzinę chodzenia i znajduje ~6 przedmiotów,
+   więc sklep musi być tańszą alternatywą dla pewności, a nie głównym źródłem
+   sprzętu. Stąd kupno = 3.5× wartość, sprzedaż = 0.4× wartość. */
+const przychodH = l => 155 + 82*l;
+const cenaKupna  = it => Math.round(it.val*3.5);
+const cenaSprzed = it => Math.round(it.val*0.4);
+const cenaMikstury = () => 15 + S.lvl*5;
+const cenaUlepszenia = (poz) => Math.round((60+S.lvl*25) * Math.pow(poz,1.5));
+const cenaOdpoczynku = () => Math.round(przychodH(S.lvl)*0.05);
+
+const Sklep={
+  /* asortyment rotuje co 6 h i zależy od miejsca — ten sam sklep ma ten sam
+     towar dla Ciebie i dla kolegi */
+  towar(b){
+    const okno=Math.floor(Date.now()/(6*3600*1000));
+    const r=rng(hash('sklep|'+b.lat.toFixed(4)+'|'+b.lng.toFixed(4)+'|'+okno+'|'+S.lvl));
+    const t=[];
+    for(let i=0;i<6;i++){
+      const it=rollItem(r, Math.max(1,S.lvl+ri(r,-1,2)), 1+r()*0.6);
+      it.id='s'+i+'_'+okno; t.push(it);
+    }
+    return t;
+  },
+  otworz(b){
+    const t=this.towar(b), R=RODZAJE[b.rodzaj];
+    let h=`<div class="item"><div class="em">${icon('🧪','items','mikstura',26)}</div>
+      <div class="t"><b>Mikstura leczenia</b><small>+40% życia · masz ${S.mikst} szt.</small></div>
+      <button onclick="Sklep.kupMikst()">${cenaMikstury()} zł</button></div>
+      <div class="sfhdr"><span>Na sprzedaż</span><small>odświeżenie co 6 h</small></div>`;
+    t.forEach((it,i)=>{
+      const c=cenaKupna(it), stac=S.gold>=c;
+      h+=`<div class="item"><div class="em">${icon(it.em,'items',bazaNazwa(it),26)}</div>
+        <div class="t"><b class="rar${it.rar}">${it.n}</b>
+        <small>${it.slot} · +${it.atk} atk · +${it.def} obr</small></div>
+        <button class="${stac?'':'off'}" onclick="Sklep.kup(${i},'${b.lat.toFixed(5)}','${b.lng.toFixed(5)}')">${c} zł</button></div>`;
+    });
+    if(S.bag.length){
+      h+=`<div class="sfhdr"><span>Skup</span><small>${Math.round(0.4*100)}% wartości</small></div>`;
+      S.bag.forEach(it=>{
+        h+=`<div class="item"><div class="em">${icon(it.em,'items',bazaNazwa(it),26)}</div>
+          <div class="t"><b class="rar${it.rar}">${it.n}</b>
+          <small>+${it.atk} atk · +${it.def} obr</small></div>
+          <button class="off" onclick="Sklep.sprzedaj('${it.id}')">${cenaSprzed(it)} zł</button></div>`;
+      });
+      if(S.bag.length>1)
+        h+=`<div class="acts"><button class="btn" onclick="Sklep.sprzedajWszystkie()">
+          💰 Sprzedaj wszystko niezałożone</button></div>`;
+    }
+    this.b=b;
+    UI.generic(`${R.em} ${b.nazwa||R.n}`, h);
+  },
+  kupMikst(){
+    const c=cenaMikstury();
+    if(S.gold<c) return toast("Za mało złota.");
+    S.gold-=c; S.mikst++; save(); refreshHUD(); this.otworz(this.b);
+    toast(`Kupiono miksturę za ${c} zł`);
+  },
+  kup(i){
+    const it=this.towar(this.b)[i], c=cenaKupna(it);
+    if(S.gold<c) return toast("Za mało złota.");
+    if(S.kupione&&S.kupione[it.id]) return toast("Już kupione — poczekaj na nowy towar.");
+    S.gold-=c; S.kupione=S.kupione||{}; S.kupione[it.id]=1;
+    it.id='k'+Math.random().toString(36).slice(2,8);
+    S.bag.push(it); save(); refreshHUD(); this.otworz(this.b);
+    toast(`Kupiono: <b class="rar${it.rar}">${it.n}</b>`);
+  },
+  sprzedaj(id){
+    const i=S.bag.findIndex(x=>x.id===id); if(i<0)return;
+    const c=cenaSprzed(S.bag[i]); S.gold+=c; S.bag.splice(i,1);
+    save(); refreshHUD(); this.otworz(this.b); toast(`+${c} zł`);
+  },
+  sprzedajWszystkie(){
+    let suma=0; S.bag.forEach(it=>suma+=cenaSprzed(it));
+    S.gold+=suma; S.bag=[]; save(); refreshHUD(); this.otworz(this.b);
+    toast(`Sprzedano wszystko za <b>${suma} zł</b>`);
+  }
+};
+
+const Kowal={
+  otworz(b){
+    const R=RODZAJE[b.rodzaj];
+    let h=`<p class="muted">Ulepszanie dodaje +15% ataku i obrony za każdy poziom.
+      Od trzeciego poziomu ulepszenie może się nie powieść — przedmiot zostaje,
+      ale złoto przepada.</p>`;
+    let sa=false;
+    for(const slot in S.eq){
+      const it=S.eq[slot]; if(!it) continue; sa=true;
+      const poz=(it.ulep||0)+1, c=cenaUlepszenia(poz), stac=S.gold>=c;
+      const ryzyko=poz>=3?Math.min(60,(poz-2)*20):0;
+      h+=`<div class="item"><div class="em">${icon(it.em,'items',bazaNazwa(it),26)}</div>
+        <div class="t"><b class="rar${it.rar}">${it.n}${it.ulep?` +${it.ulep}`:''}</b>
+        <small>+${it.atk} atk · +${it.def} obr${ryzyko?` · ryzyko ${ryzyko}%`:''}</small></div>
+        <button class="${stac?'':'off'}" onclick="Kowal.ulepsz('${slot}')">+1 za ${c} zł</button></div>`;
+    }
+    if(!sa) h+=`<p class="muted">Nie masz nic założonego. Załóż sprzęt w plecaku 🎒.</p>`;
+    this.b=b;
+    UI.generic(`${R.em} ${b.nazwa||R.n}`, h);
+  },
+  ulepsz(slot){
+    const it=S.eq[slot]; if(!it) return;
+    const poz=(it.ulep||0)+1, c=cenaUlepszenia(poz);
+    if(S.gold<c) return toast("Za mało złota.");
+    S.gold-=c;
+    const ryzyko=poz>=3?Math.min(60,(poz-2)*20)/100:0;
+    if(Math.random()<ryzyko){
+      save(); refreshHUD(); this.otworz(this.b);
+      return toast(`🔨 <b>Ulepszenie nieudane.</b><br>
+        <span style="color:#8b949e">Przedmiot bez zmian, ${c} zł przepadło.</span>`,2600);
+    }
+    it.ulep=poz;
+    it.atk=Math.round(it.atk*1.15)+(it.atk?0:1);
+    it.def=Math.round(it.def*1.15)+(it.def?0:0);
+    save(); refreshHUD(); this.otworz(this.b);
+    toast(`🔨 <b class="rar${it.rar}">${it.n} +${poz}</b>`);
+  }
+};
+/* nazwa bazowa przedmiotu -> plik graficzny (np. "Rzadki miecz" -> miecz.png) */
+function bazaNazwa(it){
+  const b=BAZY.find(x=>it.n.toLowerCase().includes(x.n.toLowerCase()));
+  return b?b.n:'miecz';
+}
 
 /* ---------------- Spawner: deterministyczny świat ---------------- */
 const Spawner={
@@ -879,6 +1047,10 @@ const Spawner={
   refresh(){
     if(!Game.pos||!World.state)return;
     const B=this.bucket(),w=World.state,live={};
+    /* Nowy gracz musi coś zobaczyć od razu — inaczej stoi i myśli, że gra
+       jest zepsuta. Dopóki nie pokona pierwszych trzech potworów, jeden
+       zawsze czeka w zasięgu 45 m. */
+    if(S.zabite<3) this.spawnPowitalny(w);
     /* 3x3 komórki wokół gracza */
     const base=cellId(Game.pos),[ca,cb]=base.split("_").map(Number);
     for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){
@@ -906,10 +1078,27 @@ const Spawner={
         .addTo(Game.map).on('click',()=>Fight.start(mob));
       mk._mob=mob;this.markers[key]=mk;
     }
-    /* usuń stare bucket'y */
+    /* usuń stare bucket'y (powitalny ma własny cykl życia) */
     for(const k in this.markers){
+      if(k.startsWith('start|')) continue;
       if(!live[k]){Game.map.removeLayer(this.markers[k]);delete this.markers[k]}
     }
+  },
+  spawnPowitalny(w){
+    const key='start|'+Math.floor(S.zabite);
+    if(this.markers[key]||S.seen[key]) return;
+    const r=rng(hash(key+'|'+cellId(Game.pos)));
+    const pool=this.pool(w); if(!pool.length) return;
+    const latwe=pool.filter(m=>m.b<=0.95); 
+    const m=pick(r, latwe.length?latwe:pool);
+    const p=offset(Game.pos, ri(r,0,359), ri(r,25,45));
+    const mob=this.zbuduj(r,m,p,key,w);
+    mob.b=Math.min(mob.b,0.95); mob.lvl=Math.max(1,S.lvl);
+    const mk=L.marker([p.lat,p.lng],{icon:L.divIcon({className:'',
+      html:`<div class="mob">${icon(m.em,'mobs',m.n,30)}</div>`,
+      iconSize:[34,34],iconAnchor:[17,17]})})
+      .addTo(Game.map).on('click',()=>Fight.start(mob));
+    this.markers[key]=mk;
   },
   kill(key){
     S.seen[key]=1;
@@ -922,6 +1111,7 @@ const Fight={
   mob:null,mhp:0,mmax:0,busy:false,
   start(mob){
     if(!Game.pos)return;
+    if(blokadaJazdy())return;
     const d=dist(Game.pos,mob.pos);
     if(d>60){toast(`Za daleko — ${Math.round(d)} m.<br><span style="color:#8b949e">Podejdź bliżej niż 60 m.</span>`);return}
     if(S.hp<=1){toast("Za mało życia. Wypij miksturę (🎒).");return}
@@ -983,9 +1173,9 @@ const Fight={
     this.line(`<b>${m.n} pokonany!</b> +${xp} xp, +${gold} zł`,'g');
     let drop=null;
     if(Math.random()<0.35*m.rareBoost){drop=rollItem(r,S.lvl,m.rareBoost);S.bag.push(drop);
-      this.line(`Łup: <b class="rar${drop.rar}">${drop.n}</b>`,'y')}
+      this.line(`Łup: <b class="rar${drop.rar}">${drop.n}</b>`,'y'); Quest.poLupie()}
     if(Math.random()<0.25){S.mikst++;this.line("Znajdujesz miksturę 🧪",'y')}
-    Spawner.kill(m.key);this.mob=null;
+    Spawner.kill(m.key); Quest.poWalce(m); this.mob=null;
     while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;
       const st=baseStats();S.hp=st.hpMax;
       this.line(`<b>AWANS! Poziom ${S.lvl}</b> — życie odnowione.`,'g');
@@ -1029,48 +1219,177 @@ const Inv={
     save();refreshHUD();if(UI.cur==='m-generic')UI.bagSheet()}
 };
 
+/* ================= KARCZMA =================
+   Centrum zleceń: tablica z trzema zadaniami (rotacja co 12 h), odpoczynek
+   za złoto i plotki podpowiadające, gdzie szukać rzadkich potworów. */
+const Karczma={
+  zlecenia(b){
+    const okno=Math.floor(Date.now()/(12*3600*1000));
+    const r=rng(hash('karczma|'+b.lat.toFixed(4)+'|'+b.lng.toFixed(4)+'|'+okno));
+    return [0,1,2].map(i=>Quest.wygeneruj(r, i));
+  },
+  plotka(b){
+    const okno=Math.floor(Date.now()/(12*3600*1000));
+    const r=rng(hash('plotka|'+b.lat.toFixed(4)+'|'+okno));
+    const kand=BEST.filter(m=>m.rz>=2);
+    const m=pick(r,kand);
+    const gdzie=m.bio.map(x=>BIOMY[x]?BIOMY[x].n.toLowerCase():x).join(' i ');
+    const kiedy=m.p==='noc'?'po zmroku':m.p==='dzien'?'za dnia':'o każdej porze';
+    const aura=m.w?({fog:'we mgle',rain:'w deszczu',snow:'gdy pada śnieg',storm:'podczas burzy'})[m.w]:'';
+    const sez=m.sez?`, ale tylko ${({zima:'zimą',wiosna:'wiosną',lato:'latem',jesien:'jesienią'})[m.sez]}`:'';
+    return `Mówią, że <b>${m.n}</b> pokazuje się ${gdzie} ${kiedy}${aura?' '+aura:''}${sez}.`;
+  },
+  otworz(b){
+    const R=RODZAJE[b.rodzaj], zl=this.zlecenia(b);
+    const koszt=cenaOdpoczynku(), st=stats(), pelne=S.hp>=st.hpMax;
+    let h=`<div class="item"><div class="em">🛏️</div><div class="t">
+      <b>Odpoczynek</b><small>${pelne?'Jesteś w pełni sił':`Życie ${Math.ceil(S.hp)}/${st.hpMax} → pełne`}</small></div>
+      <button class="${pelne||S.gold<koszt?'off':''}" onclick="Karczma.odpocznij()">${koszt} zł</button></div>
+      <div class="howto" style="margin:12px 0">💬 ${this.plotka(b)}</div>
+      <div class="sfhdr"><span>Tablica zleceń</span><small>nowe co 12 h · masz ${S.questy.length}/3</small></div>`;
+    zl.forEach((q,i)=>{
+      const wziete=S.questy.some(x=>x.kod===q.kod);
+      h+=`<div class="item"><div class="em">${q.em}</div><div class="t">
+        <b>${q.tytul}</b><small>${q.opis} · ${q.xp} xp · ${q.gold} zł</small></div>
+        <button class="${wziete||S.questy.length>=3?'off':''}"
+          onclick="Karczma.wez(${i})">${wziete?'wzięte':'Przyjmij'}</button></div>`;
+    });
+    this.b=b;
+    UI.generic(`${R.em} ${b.nazwa||R.n}`, h);
+  },
+  odpocznij(){
+    const k=cenaOdpoczynku(), st=stats();
+    if(S.hp>=st.hpMax) return toast("Jesteś w pełni sił.");
+    if(S.gold<k) return toast("Za mało złota.");
+    S.gold-=k; S.hp=st.hpMax; save(); refreshHUD(); this.otworz(this.b);
+    toast("🛏️ Odpoczynek — pełnia sił.");
+  },
+  wez(i){
+    if(S.questy.length>=3) return toast("Masz już 3 zadania. Dokończ któreś.");
+    const q=this.zlecenia(this.b)[i];
+    if(S.questy.some(x=>x.kod===q.kod)) return;
+    S.questy.push(q); save(); Quest.rysuj(); this.otworz(this.b);
+    toast(`📜 Przyjęto: <b>${q.tytul}</b>`);
+  }
+};
+
 /* ---------------- questy ---------------- */
 const Quest={
-  marker:null,
-  gen(){
-    if(!Game.pos){toast("Brak pozycji.");return}
-    const r=rng(hash("q"+Date.now()));
-    const d=ri(r,200,600),brg=ri(r,0,359);
-    const p=offset(Game.pos,brg,d);
-    const kinds=[
-      {t:"Zwiad",e:"🚩",d:`Dotrzyj do punktu ${d} m stąd i rozejrzyj się.`},
-      {t:"Zaginiony wędrowiec",e:"🧭",d:"Ktoś zniknął w tej okolicy. Sprawdź to."},
-      {t:"Stary obelisk",e:"🗿",d:"Podobno stoi tam kamień z inskrypcją."},
-      {t:"Skrytka",e:"📦",d:"Zakopana skrzynia. Współrzędne przybliżone."}
-    ];
-    const k=pick(r,kinds);
-    S.quest={lat:p.lat,lng:p.lng,title:k.t,em:k.e,desc:k.d,
-      xp:Math.round(25+S.lvl*10),gold:Math.round(15+S.lvl*6)};
-    save();this.draw();UI.questSheet();
+  markery:{},
+  /* Zadania są filtrowane przez teren, który gracz REALNIE ma wokół siebie.
+     Bez tego generator wystawiałby "zabij 5 utopców" komuś, kto mieszka
+     3 km od najbliższej wody. */
+  dostepneBiomy(){
+    const b=new Set(); if(World.state) b.add(World.state.biom);
+    OSM.land.forEach(([la,lo,x])=>{
+      if(Game.pos && dist(Game.pos,{lat:la,lng:lo})<1200) b.add(x);
+    });
+    return [...b];
   },
-  draw(){
-    if(this.marker){Game.map.removeLayer(this.marker);this.marker=null}
-    if(!S.quest)return;
-    this.marker=L.marker([S.quest.lat,S.quest.lng],{icon:L.divIcon({className:'',
-      html:`<div class="qm">${S.quest.em}</div>`,iconSize:[30,30],iconAnchor:[15,15]})}).addTo(Game.map);
-    L.circle([S.quest.lat,S.quest.lng],{radius:30,color:'#e3b341',weight:1,fillOpacity:.08})
-      .addTo(Game.map);
-  },
-  check(){
-    if(!S.quest||!Game.pos)return;
-    if(dist(Game.pos,S.quest)<30){
-      S.xp+=S.quest.xp;S.gold+=S.quest.gold;
-      toast(`<b>Zadanie ukończone!</b><br>+${S.quest.xp} xp · +${S.quest.gold} zł`,2600);
-      S.quest=null;
-      if(this.marker){Game.map.removeLayer(this.marker);this.marker=null}
-      Game.map.eachLayer(l=>{if(l instanceof L.Circle&&l.options.color==='#e3b341')Game.map.removeLayer(l)});
-      while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;S.hp=baseStats().hpMax}
-      save();refreshHUD();
+  wygeneruj(r, idx){
+    const bio=this.dostepneBiomy();
+    const biom=pick(r,bio.length?bio:['rownina']);
+    const pula=BEST.filter(m=>m.bio.includes(biom));
+    const cel=pula.length?pick(r,pula):null;
+    const L=Math.max(1,S.lvl);
+    /* idx*2 przesuwa o dwie pozycje -> trzy zlecenia na tablicy zawsze
+       mają różne typy, zamiast losować dwa razy to samo */
+    const typy=['lowy','zbieractwo','wyprawa','nocne','pogodowe','krajoznawcze'];
+    const typ=typy[(Math.floor(r()*typy.length)+idx*2)%typy.length];
+    const baseXp=Math.round(xpNeed(L)*0.28), baseZl=Math.round(przychodH(L)*0.22);
+    const kod=typ+'|'+biom+'|'+(cel?cel.n:'')+'|'+Math.floor(r()*99999);
+    const wsp = ()=>{ const d=ri(r,250,700), br=ri(r,0,359);
+      return Game.pos?offset(Game.pos,br,d):null };
+    switch(typ){
+      case 'lowy':{
+        const ile=ri(r,3,6);
+        return{kod,typ,em:'⚔️',tytul:`Łowy: ${cel?cel.n.toLowerCase():'potwory'}`,
+          opis:`Pokonaj ${ile} × ${cel?cel.n:'dowolny potwór'}`,
+          gat:cel?cel.n:null, ile, postep:0, xp:baseXp, gold:baseZl};
+      }
+      case 'zbieractwo':{
+        const ile=ri(r,2,4);
+        return{kod,typ,em:'🎒',tytul:'Zbieractwo',
+          opis:`Zdobądź ${ile} przedmioty z łupu`,
+          ile, postep:0, xp:baseXp, gold:Math.round(baseZl*1.2)};
+      }
+      case 'wyprawa':{
+        const p=wsp();
+        return{kod,typ,em:'🚩',tytul:'Wyprawa',
+          opis:'Dotrzyj do oznaczonego miejsca',
+          lat:p?p.lat:null, lng:p?p.lng:null, ile:1, postep:0,
+          xp:Math.round(baseXp*1.3), gold:Math.round(baseZl*1.3)};
+      }
+      case 'nocne':{
+        const ile=ri(r,3,5);
+        return{kod,typ,em:'🌙',tytul:'Nocna warta',
+          opis:`Pokonaj ${ile} potworów po zmroku`,
+          ile, postep:0, xp:Math.round(baseXp*1.4), gold:Math.round(baseZl*1.4)};
+      }
+      case 'pogodowe':{
+        const ile=ri(r,2,4);
+        return{kod,typ,em:'🌧️',tytul:'Przy złej aurze',
+          opis:`Pokonaj ${ile} potworów w deszczu, mgle, śniegu lub burzy`,
+          ile, postep:0, xp:Math.round(baseXp*1.6), gold:Math.round(baseZl*1.6)};
+      }
+      default:{
+        const ile=3;
+        return{kod,typ,em:'🧭',tytul:'Krajoznawstwo',
+          opis:`Odwiedź ${ile} różne rodzaje terenu`,
+          ile, postep:0, odwiedzone:[], xp:Math.round(baseXp*1.2), gold:baseZl};
+      }
     }
   },
-  drop(){S.quest=null;if(this.marker)Game.map.removeLayer(this.marker);
+  /* wywoływane po każdej wygranej walce */
+  poWalce(mob){
+    let zmiana=false;
+    S.questy.forEach(q=>{
+      if(q.postep>=q.ile) return;
+      const w=World.state;
+      if(q.typ==='lowy' && (!q.gat || q.gat===mob.gat)){q.postep++;zmiana=true}
+      if(q.typ==='nocne' && w && w.pora.k==='noc'){q.postep++;zmiana=true}
+      if(q.typ==='pogodowe' && w && ['rain','fog','snow','storm'].includes(w.pogoda.k)){q.postep++;zmiana=true}
+    });
+    if(zmiana) this.sprawdz();
+  },
+  poLupie(){
+    S.questy.forEach(q=>{ if(q.typ==='zbieractwo'&&q.postep<q.ile) q.postep++ });
+    this.sprawdz();
+  },
+  poZmianieTerenu(biom){
+    S.questy.forEach(q=>{
+      if(q.typ!=='krajoznawcze'||q.postep>=q.ile) return;
+      q.odwiedzone=q.odwiedzone||[];
+      if(!q.odwiedzone.includes(biom)){ q.odwiedzone.push(biom); q.postep=q.odwiedzone.length }
+    });
+    this.sprawdz();
+  },
+  sprawdz(){
+    if(Game.pos) S.questy.forEach(q=>{
+      if(q.typ==='wyprawa'&&q.lat&&q.postep<1&&dist(Game.pos,{lat:q.lat,lng:q.lng})<30) q.postep=1;
+    });
+    const gotowe=S.questy.filter(q=>q.postep>=q.ile);
+    gotowe.forEach(q=>{
+      S.xp+=q.xp; S.gold+=q.gold;
+      toast(`✅ <b>${q.tytul} ukończone!</b><br>+${q.xp} xp · +${q.gold} zł`,2800);
+      while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;S.hp=baseStats().hpMax;
+        if(S.lvl===10&&!S.ewo)setTimeout(()=>Evo.offer(),700);}
+    });
+    if(gotowe.length){ S.questy=S.questy.filter(q=>q.postep<q.ile); save(); this.rysuj(); refreshHUD() }
+  },
+  rysuj(){
+    for(const k in this.markery){ Game.map.removeLayer(this.markery[k]); delete this.markery[k] }
     Game.map.eachLayer(l=>{if(l instanceof L.Circle&&l.options.color==='#e3b341')Game.map.removeLayer(l)});
-    save();UI.questSheet()}
+    S.questy.forEach(q=>{
+      if(q.typ!=='wyprawa'||!q.lat) return;
+      this.markery[q.kod]=L.marker([q.lat,q.lng],{icon:L.divIcon({className:'',
+        html:`<div class="qm">${q.em}</div>`,iconSize:[30,30],iconAnchor:[15,15]})}).addTo(Game.map);
+      L.circle([q.lat,q.lng],{radius:30,color:'#e3b341',weight:1,fillOpacity:.08}).addTo(Game.map);
+    });
+  },
+  porzuc(kod){
+    S.questy=S.questy.filter(q=>q.kod!==kod); save(); this.rysuj(); UI.questSheet();
+  }
 };
 
 /* ---------------- symulacja ruchu (desktop / brak GPS) ---------------- */
@@ -1096,9 +1415,41 @@ const Sim={
 addEventListener('keydown',e=>{Sim.keys[e.key]=Sim.keys[e.key.toLowerCase()]=true});
 addEventListener('keyup',e=>{Sim.keys[e.key]=Sim.keys[e.key.toLowerCase()]=false});
 
+/* ================= BEZPIECZEŃSTWO =================
+   Gra nie może zachęcać do patrzenia w telefon podczas jazdy. Powyżej progu
+   prędkości blokujemy WSZYSTKIE interakcje — walkę, budynki, zadania.
+   Prędkość liczymy z kilku ostatnich odczytów GPS, żeby pojedynczy skok
+   sygnału nie blokował pieszego. */
+const LIMIT_KMH=25;
+const Predkosc={
+  probki:[], akt:0,
+  dodaj(p,t){
+    const ost=this.probki[this.probki.length-1];
+    if(ost){
+      const dt=(t-ost.t)/1000, d=dist(ost.p,p);
+      if(dt>0.5 && dt<30){
+        const kmh=(d/dt)*3.6;
+        if(kmh<300) this.probki.push({p,t,kmh});
+      }
+    } else this.probki.push({p,t,kmh:0});
+    if(this.probki.length>5) this.probki.shift();
+    const z=this.probki.filter(x=>x.kmh!=null).map(x=>x.kmh);
+    this.akt = z.length ? z.reduce((a,b)=>a+b,0)/z.length : 0;
+  },
+  jedzie(){ return this.akt > LIMIT_KMH }
+};
+function blokadaJazdy(){
+  if(!Predkosc.jedzie()) return false;
+  toast(`🚗 <b>Jedziesz ${Math.round(Predkosc.akt)} km/h</b><br>
+    <span style="color:#8b949e">Gra jest zablokowana powyżej ${LIMIT_KMH} km/h.<br>
+    Zatrzymaj się, żeby grać.</span>`, 3200);
+  return true;
+}
+
 /* ---------------- Game ---------------- */
 const Game={
   map:null,me:null,pos:null,lastT:0,follow:true,worldT:0,
+  watchId:null, dokladny:true, ostatniRuch:0,
   init(){
     this.map=L.map('map',{zoomControl:false,attributionControl:false}).setView([52.2297,21.0122],17);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(this.map);
@@ -1118,17 +1469,36 @@ const Game={
     }
   },
   chooseClass(k){S.klasa=k;S.hp=KLASY[k].hp;save();UI.close();this.boot()},
-  boot(){
-    if(!S.hp||S.hp<=0)S.hp=baseStats().hpMax;
-    refreshHUD();Quest.draw();
-    if(!navigator.geolocation){toast("Brak geolokalizacji — włączam symulację.");Sim.toggle();return}
-    navigator.geolocation.watchPosition(
+  startGPS(dokladny){
+    this.stopGPS(); this.dokladny=dokladny;
+    this.watchId=navigator.geolocation.watchPosition(
       p=>this.setPos({lat:p.coords.latitude,lng:p.coords.longitude},p.coords.accuracy,false),
       e=>{toast("GPS niedostępny.<br><span style='color:#8b949e'>Włączam tryb symulacji — ruch na WSAD lub klik w mapę.</span>",4500);
           if(!Sim.on)Sim.toggle()},
-      {enableHighAccuracy:true,maximumAge:5000,timeout:15000});
+      {enableHighAccuracy:dokladny, maximumAge:dokladny?5000:30000, timeout:20000});
+  },
+  stopGPS(){ if(this.watchId!=null){ navigator.geolocation.clearWatch(this.watchId); this.watchId=null } },
+  boot(){
+    if(!S.hp||S.hp<=0)S.hp=baseStats().hpMax;
+    refreshHUD();Quest.rysuj();
+    if(!navigator.geolocation){toast("Brak geolokalizacji — włączam symulację.");Sim.toggle();return}
+    this.startGPS(true);
+    /* OSZCZĘDZANIE BATERII
+       1. gdy karta jest w tle — wyłączamy nasłuch GPS zupełnie
+       2. gdy stoisz w miejscu ponad 3 min — schodzimy na tryb mniej dokładny
+          (wysoka dokładność to najdroższy element zużycia) */
+    document.addEventListener('visibilitychange',()=>{
+      if(document.hidden) this.stopGPS();
+      else if(!Sim.on) this.startGPS(this.dokladny);
+    });
+    setInterval(()=>{
+      if(Sim.on||!this.pos) return;
+      const bezruch=Date.now()-this.ostatniRuch;
+      if(bezruch>180000 && this.dokladny) this.startGPS(false);
+      else if(bezruch<60000 && !this.dokladny) this.startGPS(true);
+    },30000);
     setInterval(()=>{if(this.pos)World.update(this.pos)},5*60*1000);
-    setInterval(()=>Spawner.refresh(),30*1000);
+    setInterval(()=>Spawner.refresh(),60*1000);
   },
   setPos(p,accuracy,silent){
     const now=Date.now();
@@ -1140,6 +1510,8 @@ const Game={
     }else if(this.pos&&Sim.on){
       S.dystans+=dist(this.pos,p);
     }
+    if(!Sim.on) Predkosc.dodaj(p,now);
+    if(!this.pos || dist(this.pos,p)>8) this.ostatniRuch=now;
     this.pos=p;this.lastT=now;
     if(!this.me){
       this.me=L.marker([p.lat,p.lng],{icon:L.divIcon({className:'',html:'<div class="me"></div>',
@@ -1155,7 +1527,7 @@ const Game={
     if(c!==World.lastBiomCell){World.lastBiomCell=c;World.update(p)}
     OSM.ensure(p);            // dociąga okolicę, gdy oddalisz się od kotwicy
     Bud.rysuj();
-    Quest.check();refreshHUD();
+    Quest.sprawdz();refreshHUD();
     if(now-this.worldT>4000){this.worldT=now;Spawner.refresh();save()}
   },
   center(){this.follow=true;if(this.pos)this.map.setView([this.pos.lat,this.pos.lng],17)}
