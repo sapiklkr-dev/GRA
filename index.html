@@ -35,6 +35,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #env{margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;font-size:11px}
 .chip{background:#161b22cc;border:1px solid var(--line);border-radius:999px;padding:3px 9px;
   color:var(--dim);backdrop-filter:blur(6px)}
+.chip.klik{pointer-events:auto;cursor:pointer}
+.chip.klik:active{background:#21262d}
 .chip b{color:var(--txt);font-weight:600}
 
 /* ---------- dolny pasek ---------- */
@@ -126,12 +128,22 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
   background:#000c;border:1px solid var(--line);border-radius:10px;padding:11px 16px;
   font-size:13px;text-align:center;display:none;max-width:80%}
 kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11px}
+/* Znacznik wersji zawsze na wierzchu — bez niego nie da się stwierdzić,
+   czy przeglądarka nie podaje starego pliku z pamięci podręcznej. */
+#wer{position:absolute;right:8px;z-index:700;cursor:pointer;
+  bottom:calc(78px + env(safe-area-inset-bottom));
+  background:#161b22dd;border:1px solid var(--line);border-radius:999px;
+  padding:3px 10px;font-size:10px;color:var(--dim);backdrop-filter:blur(6px)}
+#wer:active{background:#21262d}
+#wer.zle{border-color:var(--hp);color:var(--hp)}
+#wer.ostrz{border-color:var(--gold);color:var(--gold)}
 </style>
 </head>
 <body>
 
 <div id="map"></div>
 <div id="toast"></div>
+<div id="wer" onclick="diagnostyka()" title="Diagnostyka">v? · 🩺</div>
 
 <div id="hud">
   <div class="row">
@@ -210,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="0.7";
+const WERSJA="0.9";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -727,6 +739,11 @@ function toast(t,ms=1900){const el=$('toast');el.innerHTML=t;el.style.display='b
   clearTimeout(toastT);toastT=setTimeout(()=>el.style.display='none',ms)}
 
 function refreshHUD(){
+  const wer=$('wer');
+  if(wer){
+    wer.textContent=`v${WERSJA} · 🗺️ ${OSM.stan}${OSM.poi.length?' · '+OSM.poi.length:''} · 🩺`;
+    wer.className = OSM.stan==='błąd' ? 'zle' : (OSM.poi.length ? '' : 'ostrz');
+  }
   const st=stats(),k=KLASY[S.klasa];
   $('avatar').textContent=S.ewo?evoEm():(k?k.em:'🗡️');
   $('pname').textContent=(S.ewo||(k?k.n:'Bohater'))+' · poz. '+S.lvl;
@@ -740,7 +757,7 @@ function refreshHUD(){
     <div class="chip">${w.pogoda.em} <b>${w.pogoda.n}</b>${w.temp!=null?` ${Math.round(w.temp)}°`:''}</div>
     <div class="chip">${w.sezon.em} <b>${w.sezon.n}</b></div>
     <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>
-    <div class="chip">🗺️ <b>${OSM.stan}</b>${OSM.poi.length?` · ${Bud.lista.length} bud.`:''}</div>
+    <div class="chip klik" onclick="diagnostyka()" style="${OSM.stan==='błąd'?'border-color:var(--hp);color:var(--hp)':(OSM.poi.length?'':'border-color:var(--gold);color:var(--gold)')}">🗺️ <b>${OSM.stan}</b>${OSM.poi.length?` · ${Bud.lista.length} bud.`:' · brak miejsc'} 🩺</div>
     ${Predkosc.akt>8?`<div class="chip" style="${Predkosc.jedzie()?'border-color:var(--hp);color:var(--hp)':''}">
       ${Predkosc.jedzie()?'🚗':'🏃'} <b>${Math.round(Predkosc.akt)} km/h</b>${Predkosc.jedzie()?' · zablokowane':''}</div>`:''}`:
     `<div class="chip">📡 szukam sygnału…</div>`;
