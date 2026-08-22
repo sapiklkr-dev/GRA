@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 1.6</title>
+<title>GeoRPG 1.7</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -222,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="1.6";
+const WERSJA="1.7";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -1445,16 +1445,28 @@ const Karczma={
     const r=rng(hash('karczma|'+b.lat.toFixed(4)+'|'+b.lng.toFixed(4)+'|'+okno));
     return [0,1,2].map(i=>Quest.wygeneruj(r, i));
   },
+  /* Plotki składamy z odmienionych form — biom musi wejść w miejscowniku
+     z właściwym przyimkiem ("w lesie", "na bagnach"), bo sama nazwa
+     z mianownika dawała "pokazuje się las i pola". Czasowniki dobrane tak,
+     by pasowały do każdego rodzaju gramatycznego nazwy potwora. */
+  GDZIE:{las:'w lesie', woda:'nad wodą', gory:'w górach', miasto:'w mieście',
+         pole:'na polach', bagno:'na bagnach', cmentarz:'na cmentarzu',
+         rownina:'na równinach'},
   plotka(b){
     const okno=Math.floor(Date.now()/(12*3600*1000));
     const r=rng(hash('plotka|'+b.lat.toFixed(4)+'|'+okno));
-    const kand=BEST.filter(m=>m.rz>=2);
-    const m=pick(r,kand);
-    const gdzie=m.bio.map(x=>BIOMY[x]?BIOMY[x].n.toLowerCase():x).join(' i ');
-    const kiedy=m.p==='noc'?'po zmroku':m.p==='dzien'?'za dnia':'o każdej porze';
-    const aura=m.w?({fog:'we mgle',rain:'w deszczu',snow:'gdy pada śnieg',storm:'podczas burzy'})[m.w]:'';
-    const sez=m.sez?`, ale tylko ${({zima:'zimą',wiosna:'wiosną',lato:'latem',jesien:'jesienią'})[m.sez]}`:'';
-    return `Mówią, że <b>${m.n}</b> pokazuje się ${gdzie} ${kiedy}${aura?' '+aura:''}${sez}.`;
+    const m=pick(r, BEST.filter(x=>x.rz>=2));
+    const wstep=pick(r,['Mówią, że','Ludzie gadają, że','Podobno','Starzy powiadają, że']);
+    const czas=pick(r,['grasuje','czai się','krąży','pokazuje się','poluje','przemyka']);
+    const miejsca=m.bio.slice(0,2).map(x=>this.GDZIE[x]||x);
+    const gdzie=miejsca.length>1 ? miejsca[0]+' i '+miejsca[1] : miejsca[0];
+    const czesci=[gdzie];
+    if(m.p) czesci.push(m.p==='noc'?'po zmroku':'za dnia');
+    if(m.w) czesci.push({fog:'we mgle',rain:'w deszczu',
+      snow:'gdy sypie śnieg',storm:'podczas burzy'}[m.w]);
+    if(m.sez) czesci.push({zima:'zimą',wiosna:'wiosną',
+      lato:'latem',jesien:'jesienią'}[m.sez]);
+    return `${wstep} <b>${m.n}</b> ${czas} ${czesci.join(', ')}.`;
   },
   otworz(b){
     const R=RODZAJE[b.rodzaj], zl=this.zlecenia(b);
