@@ -222,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="0.9";
+const WERSJA="1.0";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -672,7 +672,7 @@ function diagnostyka(){
   if(!OSM.proby.length) h+=`<p class="muted">Jeszcze nie odpytywano.</p>`;
   OSM.proby.forEach(p=>{
     h+=`<div class="item"><div class="em">${p.ok?'✅':'❌'}</div><div class="t">
-      <b style="font-size:12px">${p.url}</b>
+      <b style="font-size:12px">${p.etyk?p.etyk+' — ':''}${p.url}</b>
       <small>${p.ok?`zwrócił ${p.ile} obiektów`:p.blad} · ${p.ms} ms</small></div></div>`;
   });
   if(OSM.poi.length){
@@ -694,7 +694,7 @@ function diagKopiuj(){
    'pozycja: '+(Game.pos?Game.pos.lat.toFixed(4)+','+Game.pos.lng.toFixed(4):'brak'),
    'stan: '+OSM.stan+(OSM.blad?' ('+OSM.blad+')':''),
    'teren: '+OSM.land.length+', POI: '+OSM.poi.length+', budynki: '+(Bud.lista?Bud.lista.length:0),
-   'serwery: '+OSM.proby.map(p=>p.url+'='+(p.ok?p.ile+' obj':p.blad)+' '+p.ms+'ms').join(' | ')
+   'serwery: '+OSM.proby.map(p=>(p.etyk||'')+'/'+p.url+'='+(p.ok?p.ile+' obj':p.blad)+' '+p.ms+'ms').join(' | ')
   ].join('\n');
   if(navigator.clipboard) navigator.clipboard.writeText(r).then(()=>toast('📋 Raport skopiowany'));
   else UI.generic('Raport',`<textarea style="width:100%;height:180px;background:#0d1117;
@@ -788,28 +788,35 @@ const OSM={
         this.stan='z pamięci'; refreshHUD(); Bud.rysuj(); return;
       }
     }catch(e){}
-    this.czekaj=true; this.stan='pobieram…'; refreshHUD();
-    const la=pos.lat.toFixed(4), lo=pos.lng.toFixed(4), R=this.R;
-    /* KLUCZOWE: filtrujemy konkretne WARTOŚCI tagów. Wcześniej było samo
-       ["natural"], co w mieście łapało każde drzewo (natural=tree) — zapytanie
-       puchło do tysięcy obiektów i serwer je ucinał, przez co nie wracały
-       ani tereny, ani budynki. */
-    const LAND='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|orchard|vineyard|cemetery|allotments|village_green|recreation_ground)$';
-    const NAT='^(water|wood|wetland|scrub|heath|grassland|beach|cliff|peak|scree|ridge|bare_rock)$';
-    const q=`[out:json][timeout:30];(`+
-      `way(around:900,${la},${lo})["landuse"~"${LAND}"];`+
-      `way(around:900,${la},${lo})["natural"~"${NAT}"];`+
-      `relation(around:900,${la},${lo})["natural"="water"];`+
-      `nwr(around:${R},${la},${lo})["amenity"~"^(pub|bar|restaurant|cafe|fast_food)$"];`+
-      `nwr(around:${R},${la},${lo})["shop"];`+
-      `nwr(around:${R},${la},${lo})["craft"];`+
-      `);out tags center 250;`;
-    this.ostatnieZapytanie=q;
+    this.czekaj=true; this.stan='pobieram…'; this.proby=[]; refreshHUD();
+    const la=pos.lat.toFixed(4), lo=pos.lng.toFixed(4);
+    /* Dwa OSOBNE, lekkie zapytania zamiast jednego ciężkiego. Budynki są
+       ważniejsze (bez nich nie ma handlu ani zleceń), więc lecą pierwsze —
+       jeśli teren się nie dociągnie, gra i tak działa. */
+    const qPoi=`[out:json][timeout:12];(`+
+      `nwr(around:1000,${la},${lo})["amenity"~"^(pub|bar|restaurant|cafe|fast_food)$"];`+
+      `nwr(around:1000,${la},${lo})["shop"];`+
+      `nwr(around:1000,${la},${lo})["craft"];`+
+      `);out tags center 120;`;
+    const LAND='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|orchard|cemetery|allotments|village_green|recreation_ground)$';
+    const NAT='^(water|wood|wetland|scrub|heath|grassland|cliff|peak)$';
+    const qLand=`[out:json][timeout:12];(`+
+      `way(around:700,${la},${lo})["landuse"~"${LAND}"];`+
+      `way(around:700,${la},${lo})["natural"~"${NAT}"];`+
+      `);out tags center 120;`;
+    this.ostatnieZapytanie=qPoi;
+    this.anchor=pos; this.land=[]; this.poi=[];
+    let udanePoi=false;
     try{
-      const j=await this.pytaj(q);
-      this.parsuj(j, pos);
-      this.stan='ok';
-      this.blad=null;
+      this.dopisz(await this.pytaj(qPoi,'miejsca'));
+      udanePoi=true;
+    }catch(e){ this.blad='miejsca: '+String(e.message||e).slice(0,40) }
+    try{
+      this.dopisz(await this.pytaj(qLand,'teren'));
+    }catch(e){ if(!this.blad) this.blad='teren: '+String(e.message||e).slice(0,40) }
+    try{
+      this.stan = (udanePoi||this.land.length) ? 'ok' : 'błąd';
+      if(this.stan==='ok') this.blad=null;
       /* pustego wyniku nie zapisujemy — inaczej jedna nieudana odpowiedź
          blokowałaby okolicę na dobę */
       if(this.land.length||this.poi.length){
@@ -818,8 +825,8 @@ const OSM={
       }
     }catch(e){
       this.stan='błąd'; this.blad=String(e.message||e).slice(0,60);
-      this.blokadaDo=Date.now()+60000;      // nie dobijaj serwera po błędzie
     }
+    if(this.stan==='błąd') this.blokadaDo=Date.now()+45000;
     this.czekaj=false; refreshHUD(); Bud.rysuj(); Spawner.refresh();
     if(this.stan==='ok' && !this.poi.length)
       toast('🗺️ Brak sklepów i knajp w promieniu 1,2 km<br><span style="color:#8b949e">stawiam obozowisko i wędrownego kupca</span>',3000);
@@ -827,42 +834,46 @@ const OSM={
       toast('🗺️ <b>Nie udało się pobrać mapy</b><br><span style="color:#8b949e">Postać → 🩺 Diagnostyka pokaże szczegóły</span>',3600);
   },
 
-  /* Publiczne instancje Overpass bywają przeciążone i odpowiadają błędem
-     429 (za dużo zapytań) albo 504 (przekroczony czas). Próbujemy kolejno
-     kilku, zamiast poddawać się po pierwszej. */
+  /* Diagnostyka z terenu pokazała dwie różne awarie:
+       "Load failed" po ~1 s  — serwer odrzucił zapytanie i nie odesłał
+                                nagłówków CORS (przeglądarka widzi to jako błąd sieci)
+       "przekroczony czas" 25 s — zapytanie było po prostu za ciężkie
+     Stąd: GET zamiast POST (prostsze, bez sprawdzania uprawnień),
+     krótszy limit czasu i więcej serwerów w kolejce. */
   SERWERY:[
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.osm.ch/api/interpreter',
+    'https://overpass.openstreetmap.ru/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
-    'https://overpass.osm.jp/api/interpreter'
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
   ],
-  proby:[],
-  async pytaj(q){
-    this.proby=[];
+  proby:[], LIMIT_MS:13000,
+  async pytaj(q, etykieta){
     let ostatni=null;
     for(const url of this.SERWERY){
       const t0=Date.now();
       try{
         const ac=new AbortController();
-        const stoper=setTimeout(()=>ac.abort(), 25000);
-        const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(q),signal:ac.signal});
+        const stoper=setTimeout(()=>ac.abort(), this.LIMIT_MS);
+        const r=await fetch(url+'?data='+encodeURIComponent(q),
+          {method:'GET', signal:ac.signal, mode:'cors', cache:'no-store'});
         clearTimeout(stoper);
         if(!r.ok) throw new Error('HTTP '+r.status);
         const j=await r.json();
         const ile=(j.elements||[]).length;
-        this.proby.push({url:url.split('/')[2], ok:true, ms:Date.now()-t0, ile});
+        this.proby.push({url:url.split('/')[2], etyk:etykieta, ok:true, ms:Date.now()-t0, ile});
         return j;
       }catch(e){
-        const p=String(e.name==='AbortError'?'przekroczony czas':(e.message||e)).slice(0,40);
-        this.proby.push({url:url.split('/')[2], ok:false, ms:Date.now()-t0, blad:p});
+        const p=String(e.name==='AbortError'?'przekroczony czas':(e.message||e)).slice(0,36);
+        this.proby.push({url:url.split('/')[2], etyk:etykieta, ok:false, ms:Date.now()-t0, blad:p});
         ostatni=p;
       }
     }
     throw new Error(ostatni||'wszystkie serwery zawiodły');
   },
 
-  parsuj(j,pos){
-    this.anchor=pos; this.land=[]; this.poi=[];
+  dopisz(j){
     (j.elements||[]).forEach(el=>{
       const t=el.tags||{}; const c=el.center||el;
       const la=c.lat, lo=c.lon; if(la==null||lo==null) return;
