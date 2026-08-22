@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG — prototyp</title>
+<title>GeoRPG 1.5</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -222,7 +222,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="1.4";
+const WERSJA="1.5";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -741,6 +741,7 @@ function toast(t,ms=1900){const el=$('toast');el.innerHTML=t;el.style.display='b
   clearTimeout(toastT);toastT=setTimeout(()=>el.style.display='none',ms)}
 
 function refreshHUD(){
+  if(document.title.indexOf(WERSJA)<0) document.title='GeoRPG '+WERSJA;
   const wer=$('wer');
   if(wer){
     wer.textContent=`v${WERSJA} · 🗺️ ${OSM.stan}${OSM.poi.length?' · '+OSM.poi.length:''} · 🩺`;
@@ -1729,6 +1730,7 @@ const Game={
   },
   center(){this.follow=true;if(this.pos)this.map.setView([this.pos.lat,this.pos.lng],17)}
 };
+console.log('%cGeoRPG '+WERSJA,'font-size:20px;color:#58a6ff;font-weight:bold');
 Game.init();
 </script>
 </body>
