@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 2.0</title>
+<title>GeoRPG 2.1</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -198,15 +198,18 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
     <div class="em" id="fEm">👹</div>
     <h3 id="fName">Potwór</h3>
     <div class="muted" id="fSub">poz. 1</div>
+    <div id="fEfekty" style="margin-top:6px;font-size:10px"></div>
     <div class="bar hp" style="margin-top:8px"><i id="fHp"></i></div>
   </div>
   <div id="log"></div>
-  <div class="acts">
-    <button class="btn" onclick="Fight.act('atak')">⚔️ Atak</button>
-    <button class="btn" onclick="Fight.act('silny')">💥 Silny (60%)</button>
-    <button class="btn" onclick="Fight.act('mikst')" id="btnMikst">🧪 Mikstura</button>
+  <div class="acts" id="akcje"></div>
+  <div class="acts" style="margin-top:7px">
+    <button class="btn" onclick="Fight.mikstura()" id="btnMikst">🧪 Mikstura</button>
     <button class="btn" onclick="Fight.tryFlee()">🏃 Ucieczka</button>
   </div>
+  <p class="muted" style="margin:8px 0 0;font-size:11px">
+  ⚡ oznacza gotową kombinację. <b>Zwarcie → Roztrzaskanie</b> ogłusza,
+  <b>Pchnięcie</b> wywołuje krwawienie.</p>
 </div></div>
 
 <div class="mask" id="m-generic"><div class="sheet">
@@ -225,7 +228,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="2.0";
+const WERSJA="2.1";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -392,18 +395,26 @@ const AFIKSY=[
 const RANGI=[
  {k:"zwykly", n:"",         mn:1.00, lim:1.20, xp:1.0, loot:1.0,  szansa:0.865,znak:""},
  {k:"alfa",   n:"Alfa",     mn:1.06, lim:1.24, xp:1.4, loot:1.5,  szansa:0.105,znak:"❰❱"},
- {k:"elita",  n:"Elitarny", mn:1.22, lim:1.30, xp:2.6, loot:3.5,  szansa:0.028,znak:"✨"},
- {k:"boss",   n:"Prastary Pan",mn:1.38,lim:1.40,xp:6.0, loot:9.0,  szansa:0.002,znak:"👑"}
+ {k:"elita",  n:"Elitarny", mn:1.16, lim:1.24, xp:2.6, loot:3.5,  szansa:0.028,znak:"✨"},
+ {k:"boss",   n:"Prastary Pan",mn:1.28,lim:1.34,xp:6.0, loot:9.0,  szansa:0.002,znak:"👑"}
 ];
 
 /* --- stałe balansu (wyznaczone symulacją, patrz co-dalej.md) --- */
-const GROW=0.18;     // przyrost statystyk na poziom (proporcjonalny → klasy nie tracą tożsamości)
+const GROW=0.13;     // przyrost statystyk na poziom (proporcjonalny → klasy nie tracą tożsamości)
 const ARMK=60;       // stała pancerza: redukcja = def/(def+ARMK*g)
 const MOBARM=0.15;   // pancerz potwora
-const MHP=60;        // bazowe HP potwora na poziomie 1
-const MDMG=12.16;    // bazowe obrażenia potwora na poziomie 1
+const MHP=108;       // bazowe HP potwora (dostrojone pod nowy system akcji)
+const MDMG=15.24;    // bazowe obrażenia potwora (dostrojone pod nowy system akcji)
 const ELITA=1.25;    // mnożnik elity
 const gScale=l=>1+(l-1)*GROW;
+/* Potwory skalują się tak jak gracz RAZEM z punktami rozwoju. Bez tego
+   gracz odjeżdża: na 20. poziomie ma 57 punktów, czyli ~35% przewagi,
+   której potwór nie nadrabia — i balans rozjeżdża się z poziomem. */
+/* Wartość wyznaczona strojeniem: przy 0.008 balans jest najbardziej płaski
+   (rozrzut 8 p.p. między 1. a 50. poziomem). Wyższe wartości powodowały,
+   że gracz słabnie z poziomem, niższe — że odjeżdża potworom. */
+const PKT_PRZYROST = 0.008;
+const mScale = l => gScale(l)*(1+(l-1)*PKT_PRZYROST);
 
 /* ================= WARSTWA GRAFIK =================
    Zero konfiguracji: nazwa potwora → nazwa pliku. Kolega wrzuca
@@ -542,6 +553,7 @@ const LIMIT_PLECAKA=30;
 let S={
   klasa:null,ewo:null,lvl:1,xp:0,hp:0,gold:20,mikst:3,
   eq:{bron:null,tarcza:null,glowa:null,tors:null,amulet:null},
+  cechy:{atk:0,def:0,zwn:0,int:0},
   bag:[],mat:{},flasz:{m1:3},dystans:0,zabite:0,zebrane:0,
   questy:[],kupione:{},seen:{},zebraneId:{}
 };
@@ -560,13 +572,34 @@ const iloscMat=()=>Object.values(S.mat).reduce((a,m)=>a+m.ile,0);
 const wartoscMat=()=>Object.values(S.mat).reduce((a,m)=>a+m.ile*m.val,0);
 const iloscFlasz=()=>Object.values(S.flasz||{}).reduce((a,x)=>a+x,0);
 const xpNeed=l=>Math.round(45*Math.pow(1.22,l-1));
-/* skalowanie PROPORCJONALNE — kluczowe: gdyby przyrosty były stałe (+1.7 atk/poziom),
-   to na 30. poziomie mag i wojownik mieliby prawie identyczny atak i klasy przestałyby
-   się różnić. Mnożnik zachowuje proporcje przez całą grę. */
+/* ================= ROZWÓJ POSTACI =================
+   Co poziom dostajesz 3 punkty do rozdania. Żeby to nie rozwaliło balansu,
+   automatyczny przyrost statystyk został obniżony (0.18 → 0.13) — suma
+   zostaje podobna, ale to gracz decyduje o rozkładzie. Kto wszystko wrzuci
+   w atak, będzie bił mocniej i ginął szybciej. */
+const PKT_NA_POZIOM=3;
+const CECHY={
+  atk:{n:"Atak",       em:"⚔️", opis:"+2,5% obrażeń za punkt"},
+  def:{n:"Obrona",     em:"🛡️", opis:"+3% pancerza i +0,8% życia"},
+  zwn:{n:"Zwinność",   em:"🏃", opis:"unik i krytyk, lepsza ucieczka"},
+  int:{n:"Inteligencja",em:"🔮", opis:"mocniejsze mikstury, częstszy łup"}
+};
+const PKT_STARTOWE=6;
+const punktyDoWydania = () => PKT_STARTOWE+(S.lvl-1)*PKT_NA_POZIOM
+  - Object.values(S.cechy||{}).reduce((a,b)=>a+b,0);
+
 function baseStats(){
   const k=KLASY[S.klasa]||KLASY.wojownik, G=gScale(S.lvl);
-  return{hpMax:Math.round(k.hp*G),atk:Math.round(k.atk*G),
-         def:Math.round(k.def*G),kryt:k.kryt};
+  const c=S.cechy||{atk:0,def:0,zwn:0,int:0};
+  return{
+    hpMax:Math.round(k.hp*G*(1+(c.def||0)*0.008)),
+    atk:Math.round(k.atk*G*(1+(c.atk||0)*0.025)),
+    def:Math.round(k.def*G*(1+(c.def||0)*0.030)),
+    kryt:k.kryt + (c.zwn||0)*0.003,
+    unik:Math.min(0.25,(c.zwn||0)*0.004),
+    mikstMn:1+(c.int||0)*0.015,
+    lupMn:1+(c.int||0)*0.008
+  };
 }
 function stats(){
   const b=baseStats();let atk=b.atk,def=b.def;
@@ -583,6 +616,7 @@ function load(){try{const d=JSON.parse(localStorage.getItem(SAVE));if(d&&d.klasa
   if(!Array.isArray(S.questy))S.questy=[];   // migracja ze starej wersji (jedno zadanie)
   S.kupione=S.kupione||{}; delete S.quest;
   S.mat=S.mat||{}; S.zebraneId=S.zebraneId||{}; S.zebrane=S.zebrane||0;
+  S.cechy=S.cechy||{atk:0,def:0,zwn:0,int:0}; S.receptury=S.receptury||{}; S.odkryte=S.odkryte||{};
   if(!S.flasz){ S.flasz={m1:S.mikst||0} }      // stare mikstury -> małe
   return true}}catch(e){}return false}
 
@@ -655,10 +689,13 @@ const UI={
       <div class="stat">Atak<b>${st.atk}</b></div>
       <div class="stat">Obrona<b>${st.def}</b></div>
       <div class="stat">Krytyk<b>${Math.round(st.kryt*100)}%</b></div>
+      <div class="stat">Unik<b>${Math.round((st.unik||0)*100)}%</b></div>
       <div class="stat">Doświadczenie<b>${S.xp} / ${xpNeed(S.lvl)}</b></div>
       <div class="stat">Złoto<b>${S.gold}</b></div>
       <div class="stat">Przejściowo<b>${(S.dystans/1000).toFixed(2)} km</b></div>
       <div class="stat">Pokonanych<b>${S.zabite}</b></div>
+      <div class="stat">Odkryty teren<b>${Mgla.ile()} pól</b></div>
+      <div class="stat">Zebrane surowce<b>${S.zebrane||0}</b></div>
     </div>
     <div class="muted" style="margin-bottom:8px">Założone:</div>`;
     for(const s in S.eq){const it=S.eq[s];
@@ -666,6 +703,19 @@ const UI={
       <b class="${it?'rar'+it.rar:''}">${it?it.n:'— pusty —'}</b>
       <small>${s}${it?` · +${it.atk} atk · +${it.def} obr`:''}</small></div>
       ${it?`<button class="off" onclick="Inv.unequip('${s}')">Zdejmij</button>`:''}</div>`;}
+    /* ROZWÓJ — punkty do rozdania */
+    const wolne=punktyDoWydania();
+    h+=`<div class="sfhdr"><span>Rozwój</span>
+      <small>${wolne?`<b style="color:var(--xp)">${wolne} punktów do rozdania</b>`:'brak punktów'}</small></div>`;
+    for(const ck in CECHY){
+      const c=CECHY[ck], ile=(S.cechy||{})[ck]||0;
+      h+=`<div class="item"><div class="em">${c.em}</div><div class="t">
+        <b>${c.n} <span style="color:var(--gold)">${ile}</span></b>
+        <small>${c.opis}</small></div>
+        ${wolne?`<button onclick="Postac.dodaj('${ck}')">+1</button>`:''}</div>`;
+    }
+    if(wolne) h+=`<p class="muted">Punktów nie da się cofnąć — rozdzielaj z rozwagą.
+      Za każdy poziom dostajesz ${PKT_NA_POZIOM}.</p>`;
     if(S.lvl<10)h+=`<p class="muted">Ewolucja klasy na poziomie 10.</p>`;
     h+=`<div class="acts" style="margin-top:10px">
       <button class="btn" onclick="UI.helpSheet()">❓ Jak grać</button>
@@ -854,6 +904,7 @@ function refreshHUD(){
     <div class="chip">${w.pogoda.em} <b>${w.pogoda.n}</b>${w.temp!=null?` ${Math.round(w.temp)}°`:''}</div>
     <div class="chip">${w.sezon.em} <b>${w.sezon.n}</b></div>
     <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>
+    <div class="chip klik" onclick="Mgla.przelacz()">🌫️ <b>${Mgla.ile()}</b> odkrytych</div>
     <div class="chip klik" onclick="diagnostyka()" style="${OSM.stan==='błąd'?'border-color:var(--hp);color:var(--hp)':(OSM.poi.length?'':'border-color:var(--gold);color:var(--gold)')}">🗺️ <b>${OSM.stan}</b>${OSM.poi.length?` · ${Bud.lista.length} bud.`:' · brak miejsc'} 🩺</div>
     ${Predkosc.akt>8?`<div class="chip" style="${Predkosc.jedzie()?'border-color:var(--hp);color:var(--hp)':''}">
       ${Predkosc.jedzie()?'🚗':'🏃'} <b>${Math.round(Predkosc.akt)} km/h</b>${Predkosc.jedzie()?' · zablokowane':''}</div>`:''}`:
@@ -870,7 +921,7 @@ function refreshHUD(){
    podręcznej, więc każda zmiana automatycznie unieważnia stare zapisy. */
 const LAND_TAGI='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|cemetery)$';
 const NAT_TAGI='^(water|wood|wetland|grassland|peak)$';
-const SZABLON_ZAPYTAN='jedno-zapytanie-2xout|poi1000/200|land500/80|klas2|'+LAND_TAGI+'|'+NAT_TAGI;
+const SZABLON_ZAPYTAN='jedno-2xout|poi1000/200|land500/80|klas3-alchemik|'+LAND_TAGI+'|'+NAT_TAGI;
 
 const OSM={
   R:1200,            // promień pobieranego obszaru
@@ -907,7 +958,8 @@ const OSM={
     const q=`[out:json][timeout:25];`+
       `(nwr(around:1000,${la},${lo})["amenity"~"^(pub|bar|restaurant|cafe|fast_food)$"];`+
       `nwr(around:1000,${la},${lo})["shop"];`+
-      `nwr(around:1000,${la},${lo})["craft"];);`+
+      `nwr(around:1000,${la},${lo})["craft"];`+
+      `nwr(around:1000,${la},${lo})["amenity"="pharmacy"];);`+
       `out tags center 200;`+
       `(way(around:500,${la},${lo})["landuse"~"${LAND_TAGI}"];`+
       `way(around:500,${la},${lo})["natural"~"${NAT_TAGI}"];);`+
@@ -1011,6 +1063,9 @@ const OSM={
       // --- budynki ---
       let rodz=null;
       if(/^(pub|bar|restaurant|cafe|fast_food)$/.test(t.amenity||'')) rodz='karczma';
+      else if(/^(chemist|herbalist|health_food|nutrition_supplements)$/.test(t.shop||'')
+        || t.amenity==='pharmacy' || t.healthcare==='pharmacy')
+        rodz='alchemik';
       else if(t.craft || /^(hardware|doityourself|car_repair|bicycle|locksmith|tyres|trade|paint|tool_hire|motorcycle_repair|agrarian)$/.test(t.shop||''))
         rodz='kowal';
       else if(t.shop) rodz='sklep';
@@ -1079,6 +1134,7 @@ const RODZAJE={
   karczma:{n:"Karczma", em:"🍺", opis:"Zlecenia, odpoczynek, plotki"},
   sklep:  {n:"Sklep",   em:"🏪", opis:"Ekwipunek i mikstury"},
   kowal:  {n:"Kowal",   em:"🔨", opis:"Ulepszanie ekwipunku"},
+  alchemik:{n:"Alchemik",em:"⚗️", opis:"Receptury i warzenie mikstur"},
   kupiec: {n:"Wędrowny kupiec", em:"🛒", opis:"Handlarz w drodze"},
   obozowisko:{n:"Obozowisko", em:"⛺", opis:"Odpoczynek przy ognisku"}
 };
@@ -1102,6 +1158,8 @@ const NAZWY={
   kowal:['Kuźnia pod Młotem','Stara Kuźnia','Żelazna Ręka',
     'Kuźnia pod Kowadłem','Warsztat Bartosza','Kuźnia na Skarpie'],
   kupiec:['Wóz Kupiecki','Wędrowny Handlarz','Kramarz z Traktu'],
+  alchemik:['Pracownia Zielarska','Alembik i Moździerz','Pod Zieloną Retortą',
+    'Apteka pod Wężem','Warzelnia Marzanny'],
   obozowisko:['Obozowisko','Ognisko przy Trakcie','Postój Wędrowców']
 };
 function nazwijBudynek(rodzaj, lat, lng){
@@ -1115,7 +1173,7 @@ const Bud={
   /* Po jednym budynku każdego rodzaju, w dodatku rozrzucone — w centrum
      miasta bez odstępu robiła się kupa znaczników w zasięgu wzroku. */
   wybierz(pos){
-    const limit={karczma:1, sklep:1, kowal:1};
+    const limit={karczma:1, sklep:1, kowal:1, alchemik:1};
     const grupy={};
     OSM.poi.forEach(([la,lo,r])=>{
       (grupy[r]=grupy[r]||[]).push({lat:la,lng:lo,rodzaj:r,d:dist(pos,{lat:la,lng:lo})});
@@ -1141,11 +1199,13 @@ const Bud={
        Rozstawione deterministycznie, więc nie skaczą po mapie. */
     if(!out.length && OSM.stan!=='pobieram…'){
       const id=cellId(pos), c=cellCenter(id);
-      out=['kupiec','obozowisko','kowal'].map((rodz,i)=>{
+      out=['kupiec','obozowisko','kowal','alchemik'].map((rodz,i)=>{
         const r=rng(hash('bud|'+id+'|'+rodz));
         const p=offset(c, ri(r,0,359), ri(r,180,420));
         return {...p, rodzaj:rodz, awaryjny:true,
-                nazwa: rodz==='kowal' ? 'Polowa kuźnia' : nazwijBudynek(rodz,p.lat,p.lng),
+                nazwa: rodz==='kowal' ? 'Polowa kuźnia'
+                     : rodz==='alchemik' ? 'Wóz zielarki'
+                     : nazwijBudynek(rodz,p.lat,p.lng),
                 d: dist(pos,p)};
       });
     }
@@ -1182,6 +1242,7 @@ const Bud={
     if(b.awaryjny) toast('⛺ Miejsce polowe — mapa okolicy niedostępna',1800);
     if(b.rodzaj==='karczma'||b.rodzaj==='obozowisko') return Karczma.otworz(b);
     if(b.rodzaj==='kowal') return Kowal.otworz(b);
+    if(b.rodzaj==='alchemik') return Alchemik.otworz(b);
     return Sklep.otworz(b);
   }
 };
@@ -1316,6 +1377,109 @@ const Sklep={
     const z=wartoscMat(); if(!z) return;
     S.gold+=z; S.mat={}; save(); refreshHUD(); this.otworz(this.b);
     toast(`Sprzedano surowce za <b>${z} złota</b>`);
+  }
+};
+
+/* ================= ALCHEMIA =================
+   Receptury kupuje się u alchemika i zużywają się po kilku warzeniach —
+   kartka się rozpada. Dzięki temu zioła i surowce mają zastosowanie inne
+   niż sprzedaż, a zbieractwo zyskuje sens. */
+const RECEPTURY=[
+ {id:'r1', daje:'m1', n:"Receptura: mała mikstura",  em:"📜", cena:120, uzycia:10,
+  skl:[{typ:'ziolo',ile:2}]},
+ {id:'r2', daje:'m2', n:"Receptura: mikstura",       em:"📜", cena:340, uzycia:8,
+  skl:[{typ:'ziolo',ile:3},{typ:'mat',ile:1}]},
+ {id:'r3', daje:'m3', n:"Receptura: duża mikstura",  em:"📜", cena:760, uzycia:6,
+  skl:[{typ:'ziolo',ile:4},{typ:'mat',ile:2},{typ:'mineral',ile:1}]},
+ {id:'r4', daje:'m4', n:"Receptura: wielka mikstura",em:"📜", cena:1500, uzycia:5,
+  skl:[{typ:'ziolo',ile:6},{typ:'mat',ile:3},{typ:'mineral',ile:2}]}
+];
+/* rozpoznajemy, czym jest dany surowiec w sakwie */
+function typSurowca(nazwa){
+  const z=ZASOBY.find(x=>x.n===nazwa);
+  if(z) return z.typ;              // ziolo albo mineral
+  return 'mat';                    // wszystko inne to materiał z potwora
+}
+function policzSurowce(){
+  const c={ziolo:0,mineral:0,mat:0};
+  for(const k in S.mat) c[typSurowca(k)] += S.mat[k].ile;
+  return c;
+}
+/* zużywa surowce danego typu, zaczynając od najtańszych */
+function zuzyjSurowce(typ,ile){
+  const lista=Object.keys(S.mat).filter(k=>typSurowca(k)===typ)
+    .sort((a,b)=>S.mat[a].val-S.mat[b].val);
+  for(const k of lista){
+    while(ile>0 && S.mat[k].ile>0){ S.mat[k].ile--; ile--; }
+    if(S.mat[k].ile<=0) delete S.mat[k];
+    if(ile<=0) break;
+  }
+  return ile<=0;
+}
+
+const Alchemik={
+  otworz(b){
+    this.b=b;
+    const R=RODZAJE[b.rodzaj], sur=policzSurowce();
+    let h=`<div class="stats">
+      <div class="stat">Zioła<b>${sur.ziolo}</b></div>
+      <div class="stat">Minerały<b>${sur.mineral}</b></div>
+      <div class="stat">Surowce z potworów<b>${sur.mat}</b></div>
+      <div class="stat">Złoto<b>${S.gold}</b></div></div>`;
+    /* posiadane receptury */
+    const mam=Object.keys(S.receptury||{}).filter(k=>S.receptury[k]>0);
+    if(mam.length){
+      h+=`<div class="sfhdr"><span>Twoje receptury</span><small>warzenie za darmo</small></div>`;
+      mam.forEach(id=>{
+        const r=RECEPTURY.find(x=>x.id===id); if(!r) return;
+        const mikst=MIKSTURY.find(m=>m.id===r.daje);
+        const opis=r.skl.map(s=>`${s.ile}× ${({ziolo:'zioło',mineral:'minerał',mat:'surowiec'})[s.typ]}`).join(' + ');
+        const mozna=r.skl.every(s=>sur[s.typ]>=s.ile);
+        h+=`<div class="item"><div class="em">${mikst.em}</div><div class="t">
+          <b>${mikst.n}</b><small>${opis} · zostało ${S.receptury[id]} użyć</small></div>
+          <button class="${mozna?'':'off'}" onclick="Alchemik.warz('${id}')">Uwarz</button></div>`;
+      });
+    }
+    /* na sprzedaż */
+    h+=`<div class="sfhdr"><span>Receptury na sprzedaż</span><small>zużywają się</small></div>`;
+    RECEPTURY.forEach(r=>{
+      const mikst=MIKSTURY.find(m=>m.id===r.daje);
+      const stac=S.gold>=r.cena;
+      const opis=r.skl.map(s=>`${s.ile}× ${({ziolo:'zioło',mineral:'minerał',mat:'surowiec'})[s.typ]}`).join(' + ');
+      h+=`<div class="item"><div class="em">${r.em}</div><div class="t">
+        <b>${r.n}</b><small>${opis} → ${mikst.n} · ${r.uzycia} użyć</small></div>
+        <button class="${stac?'':'off'}" onclick="Alchemik.kup('${r.id}')">${r.cena} złota</button></div>`;
+    });
+    h+=`<p class="muted">Receptura rozpada się po zużyciu wszystkich kartek —
+      trzeba kupić nową. Warzenie samo w sobie nic nie kosztuje, potrzebujesz
+      tylko składników.</p>`;
+    UI.generic(`${R.em} ${b.nazwa||R.n}`, h);
+  },
+  kup(id){
+    const r=RECEPTURY.find(x=>x.id===id); if(!r) return;
+    if(S.gold<r.cena) return toast("Za mało złota.");
+    S.gold-=r.cena;
+    S.receptury=S.receptury||{};
+    S.receptury[id]=(S.receptury[id]||0)+r.uzycia;
+    save(); refreshHUD(); this.otworz(this.b);
+    toast(`📜 Kupiono: <b>${r.n}</b> (${r.uzycia} użyć)`);
+  },
+  warz(id){
+    const r=RECEPTURY.find(x=>x.id===id); if(!r) return;
+    if(!(S.receptury[id]>0)) return toast("Ta receptura się rozpadła.");
+    const sur=policzSurowce();
+    const brak=r.skl.find(s=>sur[s.typ]<s.ile);
+    if(brak) return toast(`Brakuje składników: ${brak.ile}× ${({ziolo:'zioło',mineral:'minerał',mat:'surowiec'})[brak.typ]}`);
+    r.skl.forEach(s=>zuzyjSurowce(s.typ,s.ile));
+    S.flasz[r.daje]=(S.flasz[r.daje]||0)+1;
+    S.receptury[id]--;
+    const mikst=MIKSTURY.find(m=>m.id===r.daje);
+    const koniec=S.receptury[id]<=0;
+    if(koniec) delete S.receptury[id];
+    save(); refreshHUD(); this.otworz(this.b);
+    toast(`${mikst.em} Uwarzono: <b>${mikst.n}</b>`+
+      (koniec?'<br><span style="color:#f85149">Receptura rozpadła się.</span>':''),
+      koniec?3000:1800);
   }
 };
 
@@ -1514,9 +1678,22 @@ const Spawner={
   }
 };
 
-/* ---------------- Walka ---------------- */
+/* ================= WALKA =================
+   Cztery akcje, które się nawzajem wzmacniają — o to chodziło w "kombinacjach".
+   Kluczowa zasada: żadna akcja nie jest najlepsza zawsze. Roztrzaskanie po
+   Zwarciu ogłusza, Pchnięcie nakłada krwawienie, Zwarcie ratuje przy niskim
+   życiu i ładuje następny cios. Bezmyślne klikanie jednego przycisku jest
+   wyraźnie słabsze niż sensowna sekwencja. */
+const AKCJE={
+  cios:     {n:"Cios",         em:"⚔️", cd:0, opis:"Pewny cios. Daje Rozpęd."},
+  roztrzask:{n:"Roztrzaskanie",em:"💥", cd:3, opis:"Potężny. Po Zwarciu ogłusza."},
+  pchniecie:{n:"Pchnięcie",    em:"🎯", cd:2, opis:"Omija połowę pancerza, wywołuje krwawienie."},
+  zwarcie:  {n:"Zwarcie",      em:"🛡️", cd:2, opis:"Blokuje cios, leczy, wzmacnia następną akcję."}
+};
+
 const Fight={
   mob:null,mhp:0,mmax:0,busy:false,
+  cd:{}, efekty:{}, ostatnia:null, rozped:0, blok:0,
   start(mob){
     if(!Game.pos)return;
     if(blokadaJazdy())return;
@@ -1524,68 +1701,134 @@ const Fight={
     if(d>60){toast(`Za daleko — ${Math.round(d)} m.<br><span style="color:#8b949e">Podejdź bliżej niż 60 m.</span>`);return}
     if(S.hp<=1){toast("Za mało życia. Wypij miksturę (🎒).");return}
     this.mob=mob;
-    this.mmax=Math.round(MHP*mob.b*gScale(mob.lvl));this.mhp=this.mmax;
+    this.mmax=Math.round(MHP*mob.b*mScale(mob.lvl));this.mhp=this.mmax;
+    this.cd={}; this.efekty={}; this.ostatnia=null; this.rozped=0; this.blok=0;
     $('fEm').innerHTML=icon(mob.em,'mobs',mob.gat,64);
     $('fName').textContent=mob.n;
     $('fName').style.color=mob.afiks.kol||'';
     const sf=SFERY[mob.sfera];
-    $('fSub').innerHTML=`poz. ${mob.lvl} · ${sf.em} ${sf.n}`+
+    const roz=mob.lvl-S.lvl;
+    const znacznik = roz>=3?' <b style="color:var(--hp)">☠ znacznie silniejszy</b>'
+                   : roz>=1?' <b style="color:var(--gold)">▲ silniejszy</b>'
+                   : roz<=-2?' <span style="color:var(--xp)">▼ słabszy</span>':'';
+    $('fSub').innerHTML=`poz. ${mob.lvl} · ${sf.em} ${sf.n}${znacznik}`+
       (mob.ranga.k!=='zwykly'?` · <b style="color:var(--gold)">${mob.ranga.znak} ${mob.ranga.n.toUpperCase()}</b>`:'');
     $('log').innerHTML='';this.line(`Napotykasz: <b>${mob.n}</b> (poz. ${mob.lvl}).`);
     this.draw();UI.show('m-fight');this.busy=false;
   },
   line(t,c=''){const l=$('log');l.innerHTML+=`<div class="${c}">${t}</div>`;l.scrollTop=l.scrollHeight},
-  draw(){$('fHp').style.width=Math.max(0,this.mhp/this.mmax*100)+'%';
-    const b=$('btnMikst'); if(b) b.innerHTML=`🧪 Mikstura (${iloscFlasz()})`;
-    refreshHUD()},
-  act(a){
+  draw(){
+    $('fHp').style.width=Math.max(0,this.mhp/this.mmax*100)+'%';
+    /* przyciski pokazują odnowienie i gotowe kombinacje */
+    const przyciski=Object.keys(AKCJE).map(k=>{
+      const a=AKCJE[k], gotowa=!(this.cd[k]>0);
+      let bonus='';
+      if(k==='roztrzask'&&this.blok) bonus=' ⚡';
+      if(k==='cios'&&this.rozped) bonus=' ⚡';
+      return `<button class="btn ${gotowa?'':'off'}" onclick="Fight.akcja('${k}')">
+        ${a.em} ${a.n}${bonus}${gotowa?'':` (${this.cd[k]})`}</button>`;
+    }).join('');
+    const el=$('akcje'); if(el) el.innerHTML=przyciski;
+    const bm=$('btnMikst'); if(bm) bm.innerHTML=`🧪 Mikstura (${iloscFlasz()})`;
+    /* efekty na potworze */
+    const ef=$('fEfekty');
+    if(ef){
+      const l=[];
+      if(this.efekty.krwaw) l.push(`🩸 krwawienie ${this.efekty.krwaw}`);
+      if(this.efekty.oglusz) l.push(`💫 ogłuszony ${this.efekty.oglusz}`);
+      if(this.rozped) l.push(`⚡ rozpęd`);
+      if(this.blok) l.push(`🛡️ postawa`);
+      ef.innerHTML=l.map(x=>`<span class="chip">${x}</span>`).join(' ');
+    }
+    refreshHUD();
+  },
+  akcja(k){
     if(this.busy||!this.mob)return;
-    if(a==='mikst'){
-      if(iloscFlasz()<=0){this.line("Brak mikstur.",'r');return}
-      const przed=S.hp; Inv.drink();
-      this.line(`Wypijasz miksturę (+${Math.round(S.hp-przed)} życia).`,'g');
-      this.enemyTurn();return}
+    if(this.cd[k]>0) return toast(`${AKCJE[k].n}: jeszcze ${this.cd[k]} tur.`);
     const st=stats();
-    let hit=true,mult=1;
-    if(a==='silny'){hit=Math.random()<0.6;mult=2.1}
-    if(!hit){this.line("Chybiasz!",'r');this.enemyTurn();return}
+    let mult=1, przebicie=0, opis='';
+    if(k==='cios'){ mult=1.0; this.rozped=1; opis='Rozpęd!'; }
+    if(k==='roztrzask'){
+      mult=this.blok?2.2:1.7;
+      if(this.blok){ this.efekty.oglusz=1; opis='Ogłuszenie!'; }
+    }
+    if(k==='pchniecie'){ mult=1.15; przebicie=0.5; this.efekty.krwaw=(this.efekty.krwaw||0)+2; opis='Krwawienie!'; }
+    if(k==='zwarcie'){
+      this.blok=1;
+      const lecz=Math.round(st.hpMax*0.05);
+      S.hp=Math.min(st.hpMax,S.hp+lecz);
+      this.line(`🛡️ Przyjmujesz postawę obronną (+${lecz} życia). Następna akcja mocniejsza.`,'b');
+      this.cd[k]=AKCJE[k].cd; this.ostatnia=k; this.draw(); this.turaPotwora(0.4); return;
+    }
+    if(this.rozped&&k!=='cios'){ mult*=1.15; this.rozped=0; }
     const kryt=Math.random()<st.kryt;
-    let dmg=Math.round(st.atk*mult*(0.85+Math.random()*0.3)*(kryt?1.7:1)*(1-MOBARM));
-    dmg=Math.max(1,dmg);
+    let dmg=st.atk*mult*(0.85+Math.random()*0.3)*(kryt?1.7:1)*(1-MOBARM*(1-przebicie));
+    dmg=Math.max(1,Math.round(dmg));
     this.mhp-=dmg;
-    this.line(`${kryt?'<b>KRYTYK!</b> ':''}Zadajesz <b>${dmg}</b> obrażeń.`,kryt?'y':'b');
+    this.line(`${AKCJE[k].em} ${kryt?'<b>KRYTYK!</b> ':''}${dmg} obrażeń.${opis?' <b>'+opis+'</b>':''}`,kryt?'y':'b');
+    this.cd[k]=AKCJE[k].cd;
+    this.ostatnia=k;
+    if(k!=='zwarcie') this.blok=0;
     this.draw();
     if(this.mhp<=0)return this.win();
-    this.enemyTurn();
+    this.turaPotwora(1);
   },
-  enemyTurn(){
+  turaPotwora(mnoznikObr){
     this.busy=true;
+    /* odnowienia tykają */
+    for(const k in this.cd) if(this.cd[k]>0) this.cd[k]--;
     setTimeout(()=>{
-      const st=stats(),m=this.mob;
-      const base=MDMG*(1+(m.b-1)*0.5)*gScale(m.lvl);
-      let dmg=Math.round(base*(0.8+Math.random()*0.4)*(1-armorOf(st)));
+      const st=stats(), m=this.mob;
+      /* krwawienie */
+      if(this.efekty.krwaw>0){
+        const d=Math.max(1,Math.round(this.mmax*0.04));
+        this.mhp-=d; this.efekty.krwaw--;
+        this.line(`🩸 Krwawienie: ${d} obrażeń.`,'y');
+        if(this.mhp<=0){ this.draw(); return this.win() }
+      }
+      if(this.efekty.oglusz>0){
+        this.efekty.oglusz--;
+        this.line(`💫 ${m.n} jest ogłuszony i traci turę.`,'g');
+        this.busy=false; this.draw(); save(); return;
+      }
+      /* unik ze zwinności */
+      if(Math.random()<st.unik){
+        this.line(`🏃 Unik! ${m.n} chybia.`,'g');
+        this.busy=false; this.draw(); save(); return;
+      }
+      const base=MDMG*(1+(m.b-1)*0.5)*mScale(m.lvl);
+      let dmg=Math.round(base*(0.8+Math.random()*0.4)*(1-armorOf(st))*mnoznikObr);
       dmg=Math.max(1,dmg);
       S.hp-=dmg;
-      this.line(`${m.n} zadaje <b>${dmg}</b> obrażeń.`,'r');
+      this.line(`${m.n} zadaje <b>${dmg}</b> obrażeń.${mnoznikObr<1?' (zablokowane)':''}`,'r');
       this.draw();
       if(S.hp<=0)return this.lose();
       this.busy=false;save();
     },420);
   },
+  mikstura(){
+    if(this.busy||!this.mob)return;
+    if(iloscFlasz()<=0){this.line("Brak mikstur.",'r');return}
+    const przed=S.hp; Inv.drink();
+    this.line(`Wypijasz miksturę (+${Math.round(S.hp-przed)} życia).`,'g');
+    this.draw(); this.turaPotwora(1);
+  },
   tryFlee(){
     if(!this.mob){UI.close();return}
-    const bonus=S.klasa==='lowca'?0.25:0;
-    if(Math.random()<0.55+bonus){this.line("Uciekasz.",'g');this.mob=null;setTimeout(()=>UI.close(),350)}
-    else{this.line("Ucieczka nieudana!",'r');this.enemyTurn()}
+    const st=stats();
+    const bonus=(S.klasa==='lowca'?0.2:0)+(S.cechy.zwn||0)*0.004;
+    if(Math.random()<0.5+bonus){this.line("Uciekasz.",'g');this.mob=null;setTimeout(()=>UI.close(),350)}
+    else{this.line("Ucieczka nieudana!",'r');this.turaPotwora(1)}
   },
   win(){
     const m=this.mob,r=rng(hash(m.key+"loot"+Date.now()));
+    const st=stats();
     const xp=Math.round((9+m.lvl*6)*m.b*m.xpMn), gold=Math.round((4+m.lvl*3)*m.b*m.lootMn);
     S.xp+=xp;S.gold+=gold;S.zabite++;
-    S.bestia=S.bestia||{};S.bestia[m.gat]=(S.bestia[m.gat]||0)+1;   // dziennik bestiariusza
+    S.bestia=S.bestia||{};S.bestia[m.gat]=(S.bestia[m.gat]||0)+1;
     this.line(`<b>${m.n} pokonany!</b> +${xp} xp, +${gold} złota`,'g');
     let drop=null;
-    if(Math.random()<0.35*m.rareBoost){
+    if(Math.random()<0.35*m.rareBoost*st.lupMn){
       drop=rollItem(r,S.lvl,m.rareBoost);
       if(S.bag.length>=LIMIT_PLECAKA){
         this.line(`Plecak pełny (${LIMIT_PLECAKA}) — <b>${drop.n}</b> zostaje na ziemi.`,'r');
@@ -1594,23 +1837,22 @@ const Fight={
         this.line(`Łup: <b class="rar${drop.rar}">${drop.n}</b>`,'y'); Quest.poLupie();
       }
     }
-    /* materiał ze sfery potwora — ząb, skóra, róg… */
     const pulaM=MATERIALY[m.sfera]||MATERIALY.zwierz;
-    if(Math.random()<0.40*Math.min(2,m.lootMn)){
+    if(Math.random()<0.40*Math.min(2,m.lootMn)*st.lupMn){
       const mt=pick(r,pulaM), ile=1+(Math.random()<0.25?1:0);
-      const wart=Math.round(mt.v*(1+m.lvl*0.10));   // silniejszy potwór = lepszy surowiec
+      const wart=Math.round(mt.v*(1+m.lvl*0.10));
       dodajMat(mt.n,mt.em,wart,ile);
       this.line(`Zbierasz: ${mt.em} <b>${mt.n}</b>${ile>1?' ×'+ile:''}`,'y');
     }
     if(Math.random()<0.18){S.flasz.m1=(S.flasz.m1||0)+1;this.line("Znajdujesz małą miksturę 🧪",'y')}
     Spawner.kill(m.key); Quest.poWalce(m); this.mob=null;
     while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;
-      const st=baseStats();S.hp=st.hpMax;
-      this.line(`<b>AWANS! Poziom ${S.lvl}</b> — życie odnowione.`,'g');
+      S.hp=baseStats().hpMax;
+      this.line(`<b>AWANS! Poziom ${S.lvl}</b> — życie odnowione, +${PKT_NA_POZIOM} punkty rozwoju.`,'g');
       if(S.lvl===10&&!S.ewo)setTimeout(()=>Evo.offer(),700);
     }
     save();this.draw();
-    setTimeout(()=>{if(UI.cur==='m-fight')UI.close()},1400);
+    setTimeout(()=>{if(UI.cur==='m-fight')UI.close()},1500);
   },
   lose(){
     const lost=Math.round(S.gold*0.15);S.gold-=lost;
@@ -1631,6 +1873,17 @@ const Evo={
     UI.generic("Ewolucja klasy",h);
   },
   pick(n){S.ewo=n;save();refreshHUD();UI.close();toast(`Zostajesz: <b>${n}</b>`)}
+};
+
+const Postac={
+  dodaj(ck){
+    if(punktyDoWydania()<=0) return toast("Nie masz wolnych punktów.");
+    S.cechy=S.cechy||{atk:0,def:0,zwn:0,int:0};
+    S.cechy[ck]=(S.cechy[ck]||0)+1;
+    if(ck==='def'){ const st=stats(); S.hp=Math.min(st.hpMax,S.hp+ (st.hpMax*0.008)) }
+    save(); refreshHUD(); UI.charSheet();
+    toast(`${CECHY[ck].em} ${CECHY[ck].n} +1`);
+  }
 };
 
 /* ---------------- ekwipunek ---------------- */
@@ -1707,7 +1960,18 @@ const Karczma={
     let h=`<div class="item"><div class="em">🛏️</div><div class="t">
       <b>Odpoczynek</b><small>${pelne?'Jesteś w pełni sił':`Życie ${Math.ceil(S.hp)}/${st.hpMax} → pełne`}</small></div>
       <button class="${pelne||S.gold<koszt?'off':''}" onclick="Karczma.odpocznij()">${koszt} złota</button></div>
-      <div class="howto" style="margin:12px 0">💬 ${this.plotka(b)}</div>
+      <div class="howto" style="margin:12px 0">💬 ${this.plotka(b)}</div>`;
+    const gotowe=this.doOdbioru();
+    if(gotowe.length){
+      h+=`<div class="sfhdr"><span style="color:var(--xp)">Ukończone — do odbioru</span>
+        <small>${gotowe.length}</small></div>`;
+      gotowe.forEach(q=>{
+        h+=`<div class="item" style="border-color:var(--xp)"><div class="em">${q.em}</div>
+          <div class="t"><b>${q.tytul}</b><small>${q.xp} xp · ${q.gold} złota</small></div>
+          <button onclick="Karczma.odbierz('${q.kod}')">Odbierz</button></div>`;
+      });
+    }
+    h+=`
       <div class="sfhdr"><span>Tablica zleceń</span><small>nowe co 12 h · masz ${S.questy.length}/3</small></div>`;
     zl.forEach((q,i)=>{
       const wziete=S.questy.some(x=>x.kod===q.kod);
@@ -1727,11 +1991,28 @@ const Karczma={
     toast("🛏️ Odpoczynek — pełnia sił.");
   },
   wez(i){
-    if(S.questy.length>=3) return toast("Masz już 3 zadania. Dokończ któreś.");
     const q=this.zlecenia(this.b)[i];
     if(S.questy.some(x=>x.kod===q.kod)) return;
+    /* zapamiętujemy, z której karczmy zlecenie pochodzi — nagrodę odbiera
+       się tam, gdzie się je wzięło */
+    q.zrodlo={lat:this.b.lat, lng:this.b.lng, nazwa:this.b.nazwa||'karczma'};
     S.questy.push(q); save(); Quest.rysuj(); this.otworz(this.b);
     toast(`📜 Przyjęto: <b>${q.tytul}</b>`);
+  },
+  /* odbiór nagród za ukończone zlecenia */
+  doOdbioru(){
+    if(!this.b) return [];
+    return S.questy.filter(q=>q.postep>=q.ile && q.zrodlo &&
+      dist(this.b,{lat:q.zrodlo.lat,lng:q.zrodlo.lng})<60);
+  },
+  odbierz(kod){
+    const q=S.questy.find(x=>x.kod===kod); if(!q) return;
+    S.xp+=q.xp; S.gold+=q.gold;
+    S.questy=S.questy.filter(x=>x.kod!==kod);
+    while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;S.hp=baseStats().hpMax;
+      if(S.lvl===10&&!S.ewo)setTimeout(()=>Evo.offer(),700);}
+    save(); refreshHUD(); Quest.rysuj(); this.otworz(this.b);
+    toast(`✅ <b>${q.tytul}</b><br>+${q.xp} xp · +${q.gold} złota`,2800);
   }
 };
 
@@ -1846,14 +2127,17 @@ const Quest={
     if(Game.pos) S.questy.forEach(q=>{
       if(q.typ==='wyprawa'&&q.lat&&q.postep<1&&dist(Game.pos,{lat:q.lat,lng:q.lng})<30) q.postep=1;
     });
-    const gotowe=S.questy.filter(q=>q.postep>=q.ile);
-    gotowe.forEach(q=>{
-      S.xp+=q.xp; S.gold+=q.gold;
-      toast(`✅ <b>${q.tytul} ukończone!</b><br>+${q.xp} xp · +${q.gold} złota`,2800);
-      while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;S.hp=baseStats().hpMax;
-        if(S.lvl===10&&!S.ewo)setTimeout(()=>Evo.offer(),700);}
+    /* Nagrody NIE są naliczane automatycznie — trzeba wrócić do karczmy,
+       z której wzięło się zlecenie. Daje to powód, żeby wracać w konkretne
+       miejsce, zamiast tylko oddalać się od domu. */
+    const swiezo=S.questy.filter(q=>q.postep>=q.ile && !q.zglosz);
+    swiezo.forEach(q=>{
+      q.zglosz=1;
+      const gdzie=q.zrodlo?q.zrodlo.nazwa:'karczmy';
+      toast(`✅ <b>${q.tytul} — wykonane!</b><br>
+        <span style="color:#8b949e">Wróć do: ${gdzie}, żeby odebrać nagrodę</span>`,3400);
     });
-    if(gotowe.length){ S.questy=S.questy.filter(q=>q.postep<q.ile); save(); this.rysuj(); refreshHUD() }
+    if(swiezo.length){ save(); this.rysuj(); refreshHUD() }
   },
   rysuj(){
     for(const k in this.markery){ Game.map.removeLayer(this.markery[k]); delete this.markery[k] }
@@ -1924,6 +2208,62 @@ function blokadaJazdy(){
   return true;
 }
 
+/* ================= MGŁA WOJNY =================
+   Mapa jest zaciemniona poza miejscami, w których byłeś. Odkrywa się je
+   chodzeniem — to nagradza zbaczanie z utartych tras.
+   Technicznie: jeden wielokąt pokrywający okolicę, z dziurami w miejscach
+   odkrytych. Rysujemy tylko dziury w aktualnym widoku, bo przy setkach
+   odkrytych komórek przeglądarka by tego nie udźwignęła. */
+const KRATKA=0.0006;                 // ~65 m — rozdzielczość odkrywania
+const Mgla={
+  warstwa:null, wlaczona:true, ostatnieRys:0,
+  klucz(p){ return Math.round(p.lat/KRATKA)+'_'+Math.round(p.lng/KRATKA) },
+  odkryj(pos){
+    /* odkrywamy komórkę i jej najbliższe sąsiedztwo */
+    const [a,b]=this.klucz(pos).split('_').map(Number);
+    let nowe=0;
+    for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){
+      const k=(a+i)+'_'+(b+j);
+      if(!S.odkryte[k]){ S.odkryte[k]=1; nowe++ }
+    }
+    if(nowe){ this.rysuj(); return nowe }
+    return 0;
+  },
+  ile(){ return Object.keys(S.odkryte||{}).length },
+  rysuj(){
+    if(!Game.map||!this.wlaczona) return;
+    if(Date.now()-this.ostatnieRys<400) return;     // nie odświeżaj zbyt często
+    this.ostatnieRys=Date.now();
+    const b=Game.map.getBounds();
+    if(!b) return;
+    const pw=b.getNorthEast(), pd=b.getSouthWest();
+    /* zewnętrzny prostokąt z zapasem — mgła ma sięgać poza ekran */
+    const m=0.02;
+    const zewn=[[pd.lat-m,pd.lng-m],[pd.lat-m,pw.lng+m],[pw.lat+m,pw.lng+m],[pw.lat+m,pd.lng-m]];
+    const dziury=[];
+    for(const k in S.odkryte){
+      const [a2,b2]=k.split('_').map(Number);
+      const la=a2*KRATKA, lo=b2*KRATKA;
+      if(la<pd.lat-0.004||la>pw.lat+0.004||lo<pd.lng-0.004||lo>pw.lng+0.004) continue;
+      const h=KRATKA*0.72;
+      dziury.push([[la-h,lo-h],[la-h,lo+h],[la+h,lo+h],[la+h,lo-h]]);
+      if(dziury.length>900) break;                  // bezpiecznik wydajności
+    }
+    if(this.warstwa) Game.map.removeLayer(this.warstwa);
+    this.warstwa=L.polygon([zewn,...dziury],{
+      color:'#0d1117', weight:0, fillColor:'#0d1117', fillOpacity:0.82,
+      interactive:false
+    }).addTo(Game.map);
+    if(this.warstwa.bringToBack) this.warstwa.bringToBack();
+  },
+  przelacz(){
+    this.wlaczona=!this.wlaczona;
+    if(!this.wlaczona && this.warstwa){ Game.map.removeLayer(this.warstwa); this.warstwa=null }
+    else this.rysuj();
+    toast(this.wlaczona?'🌫️ Mgła włączona':'🌫️ Mgła wyłączona');
+  }
+};
+
 /* ---------------- Game ---------------- */
 const Game={
   map:null,me:null,pos:null,lastT:0,follow:true,worldT:0,
@@ -1932,6 +2272,7 @@ const Game={
     this.map=L.map('map',{zoomControl:false,attributionControl:false}).setView([52.2297,21.0122],17);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(this.map);
     this.map.on('dragstart',()=>this.follow=false);
+    this.map.on('moveend',()=>Mgla.rysuj());
     this.map.on('click',e=>{if(Sim.on)this.setPos({lat:e.latlng.lat,lng:e.latlng.lng},5,false)});
 
     if(load()){this.boot()}
@@ -1995,6 +2336,7 @@ const Game={
       this.me=L.marker([p.lat,p.lng],{icon:L.divIcon({className:'',html:'<div class="me"></div>',
         iconSize:[20,20],iconAnchor:[10,10]}),zIndexOffset:1000}).addTo(this.map);
       this.map.setView([p.lat,p.lng],17);
+      Mgla.odkryj(p);
       World.update(p);
     }else{
       this.me.setLatLng([p.lat,p.lng]);
@@ -2005,6 +2347,8 @@ const Game={
     if(c!==World.lastBiomCell){World.lastBiomCell=c;World.update(p)}
     OSM.ensure(p);            // dociąga okolicę, gdy oddalisz się od kotwicy
     Bud.rysuj();
+    const noweP=Mgla.odkryj(p);
+    if(noweP>=3) toast(`🌫️ Odkryto nowy teren <span style="color:#8b949e">(${Mgla.ile()} pól)</span>`,1500);
     Quest.sprawdz();refreshHUD();
     if(now-this.worldT>4000){this.worldT=now;Spawner.refresh();save()}
   },
