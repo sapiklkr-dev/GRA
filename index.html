@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 2.2</title>
+<title>GeoRPG 2.3</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -231,7 +231,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="2.2";
+const WERSJA="2.3";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -949,7 +949,7 @@ function refreshHUD(){
     <div class="chip klik" onclick="Mgla.przelacz()">🌫️ <b>${Mgla.ile()}</b> odkrytych</div>
     ${(()=>{const z=strefaDla(Game.pos);const d=S.dom&&Game.pos?Math.round(dist(S.dom,Game.pos)):0;
       return `<div class="chip" style="border-color:${z.kol};color:${z.kol}">${z.em} <b>${z.n}</b>${d?` · ${d<1000?d+' m':(d/1000).toFixed(1)+' km'} od domu`:''}</div>`})()}
-    <div class="chip klik" onclick="diagnostyka()" style="${OSM.stan==='błąd'?'border-color:var(--hp);color:var(--hp)':(OSM.poi.length?'':'border-color:var(--gold);color:var(--gold)')}">🗺️ <b>${OSM.stan}</b>${OSM.poi.length?` · ${Bud.lista.length} bud.`:' · brak miejsc'} 🩺</div>
+    <div class="chip klik" onclick="diagnostyka()" style="${OSM.stan==='błąd'?'border-color:var(--hp);color:var(--hp)':(OSM.poi.length?'':'border-color:var(--gold);color:var(--gold)')}">🗺️ <b>${OSM.stan}</b>${OSM.stan==='błąd'?' · brak połączenia':(OSM.poi.length?` · ${Bud.lista.length} bud.`:' · brak POI')} 🩺</div>
     ${Predkosc.akt>8?`<div class="chip" style="${Predkosc.jedzie()?'border-color:var(--hp);color:var(--hp)':''}">
       ${Predkosc.jedzie()?'🚗':'🏃'} <b>${Math.round(Predkosc.akt)} km/h</b>${Predkosc.jedzie()?' · zablokowane':''}</div>`:''}`:
     `<div class="chip">📡 szukam sygnału…</div>`;
@@ -2384,19 +2384,32 @@ const Mgla={
     /* zewnętrzny prostokąt z zapasem — mgła ma sięgać poza ekran */
     const m=0.02;
     const zewn=[[pd.lat-m,pd.lng-m],[pd.lat-m,pw.lng+m],[pw.lat+m,pw.lng+m],[pw.lat+m,pd.lng-m]];
+    /* Odkryte miejsca wycinamy jako OKRĘGI, nie kwadraty:
+       - promień większy niż odstęp siatki, więc sąsiednie pola zachodzą
+         na siebie i tworzą gładki, ciągły obszar zamiast szachownicy,
+       - punkty w odwrotnej kolejności niż obwód zewnętrzny, bo inaczej
+         przeglądarka nie wycina dziury tylko rysuje kolejną plamę,
+       - południk jest krótszy niż równoleżnik, więc promień w długości
+         geograficznej trzeba podzielić przez cosinus szerokości. */
     const dziury=[];
+    const rl=KRATKA*1.15;
     for(const k in S.odkryte){
       const [a2,b2]=k.split('_').map(Number);
       const la=a2*KRATKA, lo=b2*KRATKA;
       if(la<pd.lat-0.004||la>pw.lat+0.004||lo<pd.lng-0.004||lo>pw.lng+0.004) continue;
-      const h=KRATKA*0.72;
-      dziury.push([[la-h,lo-h],[la-h,lo+h],[la+h,lo+h],[la+h,lo-h]]);
-      if(dziury.length>900) break;                  // bezpiecznik wydajności
+      const rg=rl/Math.max(0.25,Math.cos(la*Math.PI/180));
+      const p=[];
+      for(let i=9;i>=0;i--){                       // odwrotnie niż obwód
+        const kat=i/10*2*Math.PI;
+        p.push([la+Math.sin(kat)*rl, lo+Math.cos(kat)*rg]);
+      }
+      dziury.push(p);
+      if(dziury.length>700) break;                  // bezpiecznik wydajności
     }
     if(this.warstwa) Game.map.removeLayer(this.warstwa);
     this.warstwa=L.polygon([zewn,...dziury],{
-      color:'#0d1117', weight:0, fillColor:'#0d1117', fillOpacity:0.82,
-      interactive:false
+      color:'#0b0e14', weight:0, fillColor:'#0b0e14', fillOpacity:0.9,
+      fillRule:'evenodd', interactive:false
     }).addTo(Game.map);
     if(this.warstwa.bringToBack) this.warstwa.bringToBack();
   },
