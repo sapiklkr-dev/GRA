@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 2.3</title>
+<title>GeoRPG 2.5</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -134,6 +134,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
   background:#000c;border:1px solid var(--line);border-radius:10px;padding:11px 16px;
   font-size:13px;text-align:center;display:none;max-width:80%}
 kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11px}
+.mgla-plotno{position:absolute;left:0;top:0;pointer-events:none;z-index:399}
 /* Znacznik wersji zawsze na wierzchu — bez niego nie da się stwierdzić,
    czy przeglądarka nie podaje starego pliku z pamięci podręcznej. */
 #wer{position:absolute;right:8px;z-index:700;cursor:pointer;
@@ -231,7 +232,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="2.3";
+const WERSJA="2.5";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -2353,70 +2354,102 @@ const Zagrozenie={
 };
 
 /* ================= MGŁA WOJNY =================
-   Mapa jest zaciemniona poza miejscami, w których byłeś. Odkrywa się je
-   chodzeniem — to nagradza zbaczanie z utartych tras.
-   Technicznie: jeden wielokąt pokrywający okolicę, z dziurami w miejscach
-   odkrytych. Rysujemy tylko dziury w aktualnym widoku, bo przy setkach
-   odkrytych komórek przeglądarka by tego nie udźwignęła. */
+   Mapa jest zaciemniona poza miejscami, w których byłeś.
+
+   Dlaczego płótno, a nie wielokąt z dziurami: przy wielokątach obszar
+   pokryty DWIEMA nakładającymi się dziurami liczy się jak żadna i mgła
+   tam wraca — stąd wzór gwiazdek, który było widać wcześniej. Żadna reguła
+   wypełniania tego nie rozwiązuje. Na płótnie wycinamy koła operacją
+   „usuń", więc nakładanie po prostu wycina więcej. Przy okazji można dać
+   miękką krawędź, czego wielokąt nie potrafi. */
 const KRATKA=0.0006;                 // ~65 m — rozdzielczość odkrywania
+const PROMIEN_ODKR=140;              // metrów — jak daleko widać wokół siebie
+
 const Mgla={
-  warstwa:null, wlaczona:true, ostatnieRys:0,
+  warstwa:null, wlaczona:true, plotno:null, ctx:null,
+  ile(){ return Object.keys(S.odkryte||{}).length },
   klucz(p){ return Math.round(p.lat/KRATKA)+'_'+Math.round(p.lng/KRATKA) },
   odkryj(pos){
-    /* odkrywamy komórkę i jej najbliższe sąsiedztwo */
     const [a,b]=this.klucz(pos).split('_').map(Number);
     let nowe=0;
     for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){
       const k=(a+i)+'_'+(b+j);
       if(!S.odkryte[k]){ S.odkryte[k]=1; nowe++ }
     }
-    if(nowe){ this.rysuj(); return nowe }
-    return 0;
+    if(nowe) this.rysuj();
+    return nowe;
   },
-  ile(){ return Object.keys(S.odkryte||{}).length },
-  rysuj(){
-    if(!Game.map||!this.wlaczona) return;
-    if(Date.now()-this.ostatnieRys<400) return;     // nie odświeżaj zbyt często
-    this.ostatnieRys=Date.now();
-    const b=Game.map.getBounds();
-    if(!b) return;
-    const pw=b.getNorthEast(), pd=b.getSouthWest();
-    /* zewnętrzny prostokąt z zapasem — mgła ma sięgać poza ekran */
-    const m=0.02;
-    const zewn=[[pd.lat-m,pd.lng-m],[pd.lat-m,pw.lng+m],[pw.lat+m,pw.lng+m],[pw.lat+m,pd.lng-m]];
-    /* Odkryte miejsca wycinamy jako OKRĘGI, nie kwadraty:
-       - promień większy niż odstęp siatki, więc sąsiednie pola zachodzą
-         na siebie i tworzą gładki, ciągły obszar zamiast szachownicy,
-       - punkty w odwrotnej kolejności niż obwód zewnętrzny, bo inaczej
-         przeglądarka nie wycina dziury tylko rysuje kolejną plamę,
-       - południk jest krótszy niż równoleżnik, więc promień w długości
-         geograficznej trzeba podzielić przez cosinus szerokości. */
-    const dziury=[];
-    const rl=KRATKA*1.15;
-    for(const k in S.odkryte){
-      const [a2,b2]=k.split('_').map(Number);
-      const la=a2*KRATKA, lo=b2*KRATKA;
-      if(la<pd.lat-0.004||la>pw.lat+0.004||lo<pd.lng-0.004||lo>pw.lng+0.004) continue;
-      const rg=rl/Math.max(0.25,Math.cos(la*Math.PI/180));
-      const p=[];
-      for(let i=9;i>=0;i--){                       // odwrotnie niż obwód
-        const kat=i/10*2*Math.PI;
-        p.push([la+Math.sin(kat)*rl, lo+Math.cos(kat)*rg]);
+  init(){
+    if(this.warstwa||!Game.map) return;
+    if(!window.L||!L.Layer||!L.Layer.extend||!L.DomUtil) return;   // brak biblioteki mapy
+    const self=this;
+    const Warstwa=L.Layer.extend({
+      onAdd(map){
+        self.plotno=L.DomUtil.create('canvas','mgla-plotno');
+        self.plotno.style.pointerEvents='none';
+        map.getPanes().overlayPane.appendChild(self.plotno);
+        self.ctx=self.plotno.getContext('2d');
+        map.on('move zoom viewreset resize zoomend moveend',()=>self.rysuj());
+        self.rysuj();
+      },
+      onRemove(map){
+        if(self.plotno&&self.plotno.parentNode) self.plotno.parentNode.removeChild(self.plotno);
+        self.plotno=null; self.ctx=null;
       }
-      dziury.push(p);
-      if(dziury.length>700) break;                  // bezpiecznik wydajności
+    });
+    this.warstwa=new Warstwa();
+    Game.map.addLayer(this.warstwa);
+  },
+  rysuj(){
+    if(!this.wlaczona||!this.ctx||!Game.map) return;
+    const map=Game.map, roz=map.getSize();
+    /* płótno przypinamy do lewego górnego rogu widoku */
+    const gora=map.containerPointToLayerPoint([0,0]);
+    L.DomUtil.setPosition(this.plotno,gora);
+    if(this.plotno.width!==roz.x||this.plotno.height!==roz.y){
+      this.plotno.width=roz.x; this.plotno.height=roz.y;
     }
-    if(this.warstwa) Game.map.removeLayer(this.warstwa);
-    this.warstwa=L.polygon([zewn,...dziury],{
-      color:'#0b0e14', weight:0, fillColor:'#0b0e14', fillOpacity:0.9,
-      fillRule:'evenodd', interactive:false
-    }).addTo(Game.map);
-    if(this.warstwa.bringToBack) this.warstwa.bringToBack();
+    const ctx=this.ctx;
+    ctx.clearRect(0,0,roz.x,roz.y);
+    ctx.fillStyle='rgba(9,12,17,0.78)';
+    ctx.fillRect(0,0,roz.x,roz.y);
+    /* przelicznik metrów na piksele przy obecnym przybliżeniu */
+    const sr=map.getCenter();
+    const p1=map.latLngToContainerPoint(sr);
+    const p2=map.latLngToContainerPoint([sr.lat+0.001,sr.lng]);
+    const pxNaMetr=Math.abs(p2.y-p1.y)/111.32;      // 0.001° ≈ 111,32 m
+    const r=Math.max(6,PROMIEN_ODKR*pxNaMetr);
+    ctx.globalCompositeOperation='destination-out';
+    const b=map.getBounds().pad(0.25);
+    let ile=0;
+    for(const k in S.odkryte){
+      const [a,c]=k.split('_').map(Number);
+      const la=a*KRATKA, lo=c*KRATKA;
+      if(!b.contains([la,lo])) continue;
+      const p=map.latLngToContainerPoint([la,lo]);
+      /* Bardzo długie, łagodne przejście — im wcześniej zaczyna się zanikanie
+         i im więcej przystanków, tym mniej widać granice między sąsiednimi
+         polami. Przy krótkim gradiencie styki rysowały się jak obwódki. */
+      const g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,r);
+      g.addColorStop(0,   'rgba(0,0,0,1)');
+      g.addColorStop(0.30,'rgba(0,0,0,0.97)');
+      g.addColorStop(0.50,'rgba(0,0,0,0.86)');
+      g.addColorStop(0.68,'rgba(0,0,0,0.62)');
+      g.addColorStop(0.82,'rgba(0,0,0,0.34)');
+      g.addColorStop(0.92,'rgba(0,0,0,0.13)');
+      g.addColorStop(1,   'rgba(0,0,0,0)');
+      ctx.fillStyle=g;
+      ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2); ctx.fill();
+      if(++ile>1200) break;                          // bezpiecznik wydajności
+    }
+    ctx.globalCompositeOperation='source-over';
   },
   przelacz(){
     this.wlaczona=!this.wlaczona;
-    if(!this.wlaczona && this.warstwa){ Game.map.removeLayer(this.warstwa); this.warstwa=null }
-    else this.rysuj();
+    if(this.plotno){
+      if(!this.wlaczona){ const r=Game.map.getSize(); this.ctx.clearRect(0,0,r.x,r.y) }
+      else this.rysuj();
+    }
     toast(this.wlaczona?'🌫️ Mgła włączona':'🌫️ Mgła wyłączona');
   }
 };
@@ -2429,7 +2462,7 @@ const Game={
     this.map=L.map('map',{zoomControl:false,attributionControl:false}).setView([52.2297,21.0122],17);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(this.map);
     this.map.on('dragstart',()=>this.follow=false);
-    this.map.on('moveend',()=>Mgla.rysuj());
+    Mgla.init();
     this.map.on('click',e=>{if(Sim.on)this.setPos({lat:e.latlng.lat,lng:e.latlng.lng},5,false)});
 
     if(load()){this.boot()}
