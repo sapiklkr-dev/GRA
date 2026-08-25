@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 2.1</title>
+<title>GeoRPG 2.2</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -106,6 +106,9 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 .mob img{display:block}
 .mob .rank{position:absolute;top:-9px;right:-9px;font-size:12px;
   filter:drop-shadow(0 0 3px #000)}
+.mob .grupa{position:absolute;bottom:-7px;left:-8px;font-size:10px;font-weight:700;
+  background:#f85149;color:#fff;border-radius:999px;padding:0 5px;
+  border:1px solid #0d1117}
 .mob.r-elita{animation:bob 2.4s ease-in-out infinite,puls 1.6s ease-in-out infinite}
 .mob.r-boss{transform:scale(1.3);animation:bob 2s ease-in-out infinite,puls 1.1s ease-in-out infinite}
 @keyframes puls{50%{filter:drop-shadow(0 0 9px var(--gold))}}
@@ -228,7 +231,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="2.1";
+const WERSJA="2.2";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -272,17 +275,43 @@ const BIOMY={
      sez – wymagany sezon, null = dowolny
      rz  – rzadkość 1 (pospolity) … 3 (rzadki)
    Mnogość bierze się z kombinacji gatunek × afiks × ranga, nie z samej liczby wpisów. */
+/* ================= STREFY ZAGROŻENIA =================
+   Pomysł Krzyśka: sfery przypisane do stref o rosnącej groźności.
+   Zmiana względem oryginału: strefa nie jest stałym punktem na mapie,
+   tylko zależy od ODLEGŁOŚCI OD DOMU gracza.
+
+   Powód: w grze na mapie nikt nie wybiera, gdzie mieszka. Stałe strefy
+   oznaczałyby, że jeden gracz ma czarną za rogiem, a drugi 8 km dalej
+   i nigdy nie zobaczy Bestii — to loteria adresowa, nie trudność.
+   Tak każdy ma wszystkie strefy wokół siebie, tylko musi się po nie wybrać. */
+const STREFY=[
+  {k:'zielona',  n:"Zielona",  em:"🟢", od:0,    kol:'#3fb950', opis:"Bezpiecznie"},
+  {k:'zolta',    n:"Żółta",    em:"🟡", od:800,  kol:'#e3b341', opis:"Uważaj"},
+  {k:'czerwona', n:"Czerwona", em:"🔴", od:2200, kol:'#f85149', opis:"Potwory atakują same"},
+  {k:'czarna',   n:"Czarna",   em:"⚫", od:4500, kol:'#bc8cff', opis:"Tylko dla wprawnych"}
+];
+function strefaDla(pos){
+  if(!S.dom||!pos) return STREFY[0];
+  const d=dist(S.dom,pos);
+  let w=STREFY[0];
+  for(const s of STREFY) if(d>=s.od) w=s;
+  return w;
+}
+const strefaIdx = k => STREFY.findIndex(s=>s.k===k);
+
 const SFERY={
-  zwierz:   {n:"Zwierzęta", em:"🐾"},
-  nieumarli:{n:"Nieumarli", em:"💀"},
-  zjawy:    {n:"Zjawy",     em:"👻"},
-  demony:   {n:"Demony",    em:"😈"},
-  zywioly:  {n:"Żywiołaki", em:"🌀"},
-  ludzie:   {n:"Ludzie",    em:"🗡️"},
-  bestie:   {n:"Bestie",    em:"🐉"},
-  natura:   {n:"Natura",    em:"🌿"},
-  owady:    {n:"Owady",     em:"🕷️"}
+  zwierz:   {n:"Zwierzęta", em:"🐾", min:1,  max:20, strefa:'zielona'},
+  natura:   {n:"Natura",    em:"🌿", min:1,  max:20, strefa:'zielona'},
+  owady:    {n:"Owady",     em:"🕷️", min:1,  max:22, strefa:'zielona'},
+  nieumarli:{n:"Nieumarli", em:"💀", min:8,  max:30, strefa:'zielona'},
+  ludzie:   {n:"Ludzie",    em:"🗡️", min:15, max:35, strefa:'zolta'},
+  zjawy:    {n:"Zjawy",     em:"👻", min:20, max:45, strefa:'zolta'},
+  zywioly:  {n:"Żywiołaki", em:"🌀", min:25, max:50, strefa:'zolta'},
+  demony:   {n:"Demony",    em:"😈", min:35, max:65, strefa:'czerwona'},
+  bestie:   {n:"Bestie",    em:"🐉", min:45, max:80, strefa:'czarna'}
 };
+/* Sfery, w których potwory chodzą w grupach — propozycja Krzyśka. */
+const SFERY_DRUZYNOWE=['nieumarli','zjawy','demony','ludzie'];
 const BEST=[
  /* --- ZWIERZĘTA --- */
  {n:"Wilk",em:"🐺",s:"zwierz",b:0.92,bio:["las","rownina"],rz:1},
@@ -669,6 +698,19 @@ const UI={
     dwa razy więcej elit i wyraźnie lepszy łup. Warto wyjść w paskudną pogodę.</p>
     <p class="muted"><b>Symulacja 🕹️</b> — dla grania bez GPS (albo przy komputerze).
     Ruch klawiszami <kbd>WSAD</kbd> lub kliknięciem w mapę.</p>
+    <div class="sfhdr"><span>Strefy zagrożenia</span><small>liczone od domu 🏠</small></div>
+    ${STREFY.map((z,i)=>{
+      const nast=STREFY[i+1];
+      const zakres = nast ? `${z.od} – ${nast.od} m` : `ponad ${z.od} m`;
+      const sfery=Object.keys(SFERY).filter(k=>SFERY[k].strefa===z.k)
+        .map(k=>SFERY[k].em+' '+SFERY[k].n+' ('+SFERY[k].min+'–'+SFERY[k].max+')');
+      return `<div class="item"><div class="em">${z.em}</div><div class="t">
+        <b style="color:${z.kol}">${z.n}</b><small>${zakres} od domu · ${z.opis}
+        ${sfery.length?'<br>dochodzą: '+sfery.join(', '):''}</small></div></div>`;
+    }).join('')}
+    <p class="muted">Im dalej od domu, tym groźniej — ale też ciekawiej.
+    W czerwonej i czarnej strefie potwory potrafią zaatakować same.
+    Dom przeniesiesz w karczmie za ${KOSZT_DOMU} złota.</p>
     <p class="muted"><b>Elity ✨</b> są mocne — przed walką miej mikstury. Ucieczka
     zawsze jest opcją, łowca ucieka najskuteczniej.</p>
     <p class="muted" style="border-top:1px solid var(--line);padding-top:10px">
@@ -905,6 +947,8 @@ function refreshHUD(){
     <div class="chip">${w.sezon.em} <b>${w.sezon.n}</b></div>
     <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>
     <div class="chip klik" onclick="Mgla.przelacz()">🌫️ <b>${Mgla.ile()}</b> odkrytych</div>
+    ${(()=>{const z=strefaDla(Game.pos);const d=S.dom&&Game.pos?Math.round(dist(S.dom,Game.pos)):0;
+      return `<div class="chip" style="border-color:${z.kol};color:${z.kol}">${z.em} <b>${z.n}</b>${d?` · ${d<1000?d+' m':(d/1000).toFixed(1)+' km'} od domu`:''}</div>`})()}
     <div class="chip klik" onclick="diagnostyka()" style="${OSM.stan==='błąd'?'border-color:var(--hp);color:var(--hp)':(OSM.poi.length?'':'border-color:var(--gold);color:var(--gold)')}">🗺️ <b>${OSM.stan}</b>${OSM.poi.length?` · ${Bud.lista.length} bud.`:' · brak miejsc'} 🩺</div>
     ${Predkosc.akt>8?`<div class="chip" style="${Predkosc.jedzie()?'border-color:var(--hp);color:var(--hp)':''}">
       ${Predkosc.jedzie()?'🚗':'🏃'} <b>${Math.round(Predkosc.akt)} km/h</b>${Predkosc.jedzie()?' · zablokowane':''}</div>`:''}`:
@@ -1138,6 +1182,7 @@ const RODZAJE={
   kupiec: {n:"Wędrowny kupiec", em:"🛒", opis:"Handlarz w drodze"},
   obozowisko:{n:"Obozowisko", em:"⛺", opis:"Odpoczynek przy ognisku"}
 };
+const KOSZT_DOMU=500;
 const ZASIEG_BUD=40;      // metrów — do sklepu trzeba faktycznie dojść
 const ODSTEP_BUD=350;     // minimalny odstęp między budynkami — inaczej w centrum
                           // miasta robi się ich kilka w zasięgu wzroku
@@ -1530,13 +1575,19 @@ function bazaNazwa(it){
 /* ---------------- Spawner: deterministyczny świat ---------------- */
 const Spawner={
   markers:{},
-  /* gatunki pasujące do aktualnych warunków świata */
-  pool(w){
-    return BEST.filter(m=>
-      m.bio.includes(w.biom) &&
-      (!m.p   || m.p===w.pora.k) &&
-      (!m.w   || m.w===w.pogoda.k) &&
-      (!m.sez || m.sez===w.sezon.k));
+  /* Gatunki pasujące do warunków świata ORAZ do strefy zagrożenia.
+     Strefa działa jak przepustka: w zielonej nie spotkasz demonów,
+     ale im dalej od domu, tym więcej sfer dochodzi. */
+  pool(w, strefa){
+    const dop = strefaIdx((strefa||strefaDla(Game.pos)).k);
+    return BEST.filter(m=>{
+      const sf=SFERY[m.s];
+      if(sf && strefaIdx(sf.strefa)>dop) return false;
+      return m.bio.includes(w.biom) &&
+        (!m.p   || m.p===w.pora.k) &&
+        (!m.w   || m.w===w.pogoda.k) &&
+        (!m.sez || m.sez===w.sezon.k);
+    });
   },
   /* losowanie ważone rzadkością: rz1 pospolity, rz3 rzadki */
   wybierz(r,pool){
@@ -1568,12 +1619,35 @@ const Spawner={
     let lvl=Math.max(1, S.lvl + ri(r,-2, grozny?4:3));
     if(ran.k==='elita') lvl=Math.max(lvl, S.lvl+2);
     if(ran.k==='boss')  lvl=Math.max(lvl, S.lvl+3);
+    /* Zakres sfery PRZYCINA poziom, zamiast go narzucać. Dzięki temu:
+       - w zielonej strefie na 40. poziomie zwierzęta są łatwe (cap 20),
+       - kto zawędruje do czerwonej na 10. poziomie, trafi na demony 35+
+         i dostanie czytelne ostrzeżenie, zamiast pustej mapy. */
+    const sf=SFERY[m.s];
+    if(sf) lvl=Math.max(sf.min, Math.min(sf.max, lvl));
     const nazwa=[af.n,ran.n,ran.k==='boss'?m.n.toLowerCase():m.n]
       .filter(Boolean).join(" ");
-    return{key,n:nazwa,em:m.em,gat:m.n,sfera:m.s,b,lvl,afiks:af,ranga:ran,
+    const mob={key,n:nazwa,em:m.em,gat:m.n,sfera:m.s,b,lvl,afiks:af,ranga:ran,
       pos,elite:ran.k!=='zwykly',
       xpMn:af.xp*ran.xp, lootMn:af.loot*ran.loot,
       rareBoost:w.pogoda.rare*ran.loot*af.loot};
+    /* Drużyny — pomysł Krzyśka. Walka jest sekwencyjna: pokonujesz jednego,
+       wychodzi następny, bez leczenia między nimi. Dlatego towarzysze są
+       słabsi od prowodyra, inaczej trzyosobowa grupa byłaby wyrokiem. */
+    if(SFERY_DRUZYNOWE.includes(m.s) && ran.k==='zwykly' && r()<0.35){
+      const ilu=1+(r()<0.35?1:0);
+      mob.druzyna=[];
+      for(let i=0;i<ilu;i++){
+        mob.druzyna.push({
+          n:m.n, gat:m.n, em:m.em, sfera:m.s,
+          b:b*0.85, lvl:Math.max(1,lvl-1),
+          afiks:AFIKSY[2], ranga:RANGI[0],
+          xpMn:af.xp*0.6, lootMn:af.loot*0.5, rareBoost:w.pogoda.rare*0.5
+        });
+      }
+      mob.n = (ilu+1)+'× '+m.n;
+    }
+    return mob;
   },
   /* bucket czasu: świat "odświeża się" co 20 min → ten sam gracz w tym samym
      miejscu i czasie widzi to samo. Fundament pod serwer autorytatywny. */
@@ -1607,7 +1681,8 @@ const Spawner={
         html:`<div class="mob${mob.ranga.k!=='zwykly'?' r-'+mob.ranga.k:''}"
               ${mob.afiks.kol?`style="filter:drop-shadow(0 0 5px ${mob.afiks.kol})"`:''}>
               ${icon(m.em,'mobs',m.n,30)}
-              ${mob.ranga.znak?`<b class="rank">${mob.ranga.znak}</b>`:''}</div>`,
+              ${mob.ranga.znak?`<b class="rank">${mob.ranga.znak}</b>`:''}
+              ${mob.druzyna?`<b class="grupa">${mob.druzyna.length+1}</b>`:''}</div>`,
           iconSize:[34,34],iconAnchor:[17,17]})})
         .addTo(Game.map).on('click',()=>Fight.start(mob));
       mk._mob=mob;this.markers[key]=mk;
@@ -1701,6 +1776,7 @@ const Fight={
     if(d>60){toast(`Za daleko — ${Math.round(d)} m.<br><span style="color:#8b949e">Podejdź bliżej niż 60 m.</span>`);return}
     if(S.hp<=1){toast("Za mało życia. Wypij miksturę (🎒).");return}
     this.mob=mob;
+    this.kolejka=(mob.druzyna||[]).slice();
     this.mmax=Math.round(MHP*mob.b*mScale(mob.lvl));this.mhp=this.mmax;
     this.cd={}; this.efekty={}; this.ostatnia=null; this.rozped=0; this.blok=0;
     $('fEm').innerHTML=icon(mob.em,'mobs',mob.gat,64);
@@ -1845,7 +1921,20 @@ const Fight={
       this.line(`Zbierasz: ${mt.em} <b>${mt.n}</b>${ile>1?' ×'+ile:''}`,'y');
     }
     if(Math.random()<0.18){S.flasz.m1=(S.flasz.m1||0)+1;this.line("Znajdujesz małą miksturę 🧪",'y')}
-    Spawner.kill(m.key); Quest.poWalce(m); this.mob=null;
+    Quest.poWalce(m);
+    /* kolejny z drużyny wchodzi bez przerwy — życia się nie odnawia */
+    if(this.kolejka && this.kolejka.length){
+      const nast=this.kolejka.shift();
+      this.mob={...nast, key:m.key, pos:m.pos};
+      this.mmax=Math.round(MHP*nast.b*mScale(nast.lvl)); this.mhp=this.mmax;
+      this.cd={}; this.efekty={}; this.rozped=0; this.blok=0;
+      $('fName').textContent=nast.n+(this.kolejka.length?` (jeszcze ${this.kolejka.length})`:'');
+      $('fEm').innerHTML=icon(nast.em,'mobs',nast.gat,64);
+      this.line(`<b>Do walki staje kolejny: ${nast.n}!</b>`,'r');
+      save(); this.draw(); this.busy=false;
+      return;
+    }
+    Spawner.kill(m.key); this.mob=null;
     while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;
       S.hp=baseStats().hpMax;
       this.line(`<b>AWANS! Poziom ${S.lvl}</b> — życie odnowione, +${PKT_NA_POZIOM} punkty rozwoju.`,'g');
@@ -1961,6 +2050,13 @@ const Karczma={
       <b>Odpoczynek</b><small>${pelne?'Jesteś w pełni sił':`Życie ${Math.ceil(S.hp)}/${st.hpMax} → pełne`}</small></div>
       <button class="${pelne||S.gold<koszt?'off':''}" onclick="Karczma.odpocznij()">${koszt} złota</button></div>
       <div class="howto" style="margin:12px 0">💬 ${this.plotka(b)}</div>`;
+    const odDomu=S.dom?Math.round(dist(S.dom,b)):0;
+    if(odDomu>400){
+      h+=`<div class="item"><div class="em">🏠</div><div class="t">
+        <b>Przenieś dom tutaj</b><small>Strefy liczą się od domu · obecnie
+        ${odDomu<1000?odDomu+' m':(odDomu/1000).toFixed(1)+' km'} stąd</small></div>
+        <button class="${S.gold<KOSZT_DOMU?'off':''}" onclick="Karczma.przeniesDom()">${KOSZT_DOMU} złota</button></div>`;
+    }
     const gotowe=this.doOdbioru();
     if(gotowe.length){
       h+=`<div class="sfhdr"><span style="color:var(--xp)">Ukończone — do odbioru</span>
@@ -1982,6 +2078,15 @@ const Karczma={
     });
     this.b=b;
     UI.generic(`${R.em} ${b.nazwa||R.n}`, h);
+  },
+  przeniesDom(){
+    if(S.gold<KOSZT_DOMU) return toast("Za mało złota.");
+    S.gold-=KOSZT_DOMU;
+    S.dom={lat:this.b.lat,lng:this.b.lng};
+    Zagrozenie.ostatnia=null;
+    save(); refreshHUD(); this.otworz(this.b);
+    toast(`🏠 <b>Nowy dom: ${this.b.nazwa}</b><br>
+      <span style="color:#8b949e">Strefy liczą się teraz od tego miejsca</span>`,3000);
   },
   odpocznij(){
     const k=cenaOdpoczynku(), st=stats();
@@ -2208,6 +2313,45 @@ function blokadaJazdy(){
   return true;
 }
 
+/* ================= ZASADZKI =================
+   W czerwonej i czarnej strefie potwory potrafią zaatakować same, gdy
+   podejdziesz zbyt blisko — pomysł Krzyśka. Ostrzeżenie przy wejściu do
+   strefy jest obowiązkowe: gracz musi wiedzieć, że wszedł na cudzy teren. */
+const Zagrozenie={
+  ostatnia:null, ostatniAtak:0,
+  sprawdz(pos){
+    const s=strefaDla(pos);
+    /* komunikat przy zmianie strefy */
+    if(this.ostatnia!==s.k){
+      const wchodzi = this.ostatnia==null ? false
+        : strefaIdx(s.k) > strefaIdx(this.ostatnia);
+      this.ostatnia=s.k;
+      if(wchodzi && s.k!=='zielona'){
+        toast(`${s.em} <b>Strefa ${s.n.toLowerCase()}</b><br>
+          <span style="color:${s.kol}">${s.opis}</span>`, 3200);
+      }
+      refreshHUD();
+    }
+    if(s.k!=='czerwona' && s.k!=='czarna') return;
+    if(Fight.mob) return;                       // już walczysz
+    if(Date.now()-this.ostatniAtak < 45000) return;   // nie częściej niż co 45 s
+    if(blokadaJazdy&&Predkosc.jedzie()) return;
+    /* 20% szans, gdy potwór jest naprawdę blisko */
+    for(const k in Spawner.markers){
+      const mk=Spawner.markers[k];
+      if(!mk||!mk._mob) continue;
+      const d=dist(pos,mk._mob.pos);
+      if(d>35) continue;
+      if(Math.random()<0.20){
+        this.ostatniAtak=Date.now();
+        toast(`⚔️ <b>${mk._mob.n} atakuje!</b>`,2000);
+        setTimeout(()=>Fight.start(mk._mob),600);
+        return;
+      }
+    }
+  }
+};
+
 /* ================= MGŁA WOJNY =================
    Mapa jest zaciemniona poza miejscami, w których byłeś. Odkrywa się je
    chodzeniem — to nagradza zbaczanie z utartych tras.
@@ -2331,6 +2475,7 @@ const Game={
     }
     if(!Sim.on) Predkosc.dodaj(p,now);
     if(!this.pos || dist(this.pos,p)>8) this.ostatniRuch=now;
+    if(!S.dom){ S.dom={lat:p.lat,lng:p.lng}; save(); }
     this.pos=p;this.lastT=now;
     if(!this.me){
       this.me=L.marker([p.lat,p.lng],{icon:L.divIcon({className:'',html:'<div class="me"></div>',
@@ -2347,6 +2492,7 @@ const Game={
     if(c!==World.lastBiomCell){World.lastBiomCell=c;World.update(p)}
     OSM.ensure(p);            // dociąga okolicę, gdy oddalisz się od kotwicy
     Bud.rysuj();
+    Zagrozenie.sprawdz(p);
     const noweP=Mgla.odkryj(p);
     if(noweP>=3) toast(`🌫️ Odkryto nowy teren <span style="color:#8b949e">(${Mgla.ile()} pól)</span>`,1500);
     Quest.sprawdz();refreshHUD();
