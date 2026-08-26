@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 3.0</title>
+<title>GeoRPG 3.1</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -279,7 +279,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="3.0";
+const WERSJA="3.1";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -638,7 +638,7 @@ let S={
   klasa:null,ewo:null,lvl:1,xp:0,hp:0,gold:20,mikst:3,
   eq:{bron:null,tarcza:null,glowa:null,tors:null,amulet:null},
   cechy:{atk:0,def:0,zwn:0,int:0},
-  bag:[],mat:{},flasz:{m1:3},dystans:0,zabite:0,zebrane:0,
+  bag:[],mat:{},flasz:{m1:3},wedrowni:{},leg:{},dystans:0,zabite:0,zebrane:0,
   questy:[],kupione:{},seen:{},zebraneId:{}
 };
 /* materiały i zasoby sumują się i NIE zajmują miejsca w plecaku —
@@ -701,6 +701,7 @@ function load(){try{const d=JSON.parse(localStorage.getItem(SAVE));if(d&&d.klasa
   S.kupione=S.kupione||{}; delete S.quest;
   S.mat=S.mat||{}; S.zebraneId=S.zebraneId||{}; S.zebrane=S.zebrane||0;
   S.cechy=S.cechy||{atk:0,def:0,zwn:0,int:0}; S.receptury=S.receptury||{}; S.odkryte=S.odkryte||{};
+  S.wedrowni=S.wedrowni||{}; S.leg=S.leg||{};
   if(!S.flasz){ S.flasz={m1:S.mikst||0} }      // stare mikstury -> małe
   return true}}catch(e){}return false}
 
@@ -1416,7 +1417,30 @@ const Bud={
      zamkniętym albo w wodzie i po prostu nie dało się do niego dojść.
      Skoro gracz tamtędy przeszedł, na pewno jest tam dostęp. */
   dostepneMiejsce(pos, rodzaj){
-    const r=rng(hash('zast|'+cellId(pos)+'|'+rodzaj));
+    /* Raz postawiony wędrowny budynek ZOSTAJE w swoim miejscu.
+       Wcześniej losowałem go od nowa przy każdym odświeżeniu, licząc od
+       aktualnej pozycji — więc im bliżej gracz podchodził, tym bardziej
+       budynek uciekał. Teraz zapisujemy go na stałe i odtwarzamy. */
+    S.wedrowni=S.wedrowni||{};
+    let naj=null, najD=1e9;
+    for(const k in S.wedrowni){
+      const zap=S.wedrowni[k];
+      if(zap.rodzaj!==rodzaj) continue;
+      const d=dist(pos,zap);
+      if(d<najD){ najD=d; naj=zap }
+    }
+    /* trzymamy się istniejącego, dopóki nie oddalimy się nadmiernie */
+    if(naj && najD<900) return {lat:naj.lat, lng:naj.lng};
+
+    const r=rng(hash('zast|'+cellId(pos)+'|'+rodzaj+'|'+Object.keys(S.wedrowni).length));
+    const zapisz=(p)=>{
+      S.wedrowni[rodzaj+'|'+p.lat.toFixed(5)+'|'+p.lng.toFixed(5)]={lat:p.lat,lng:p.lng,rodzaj};
+      /* nie trzymamy w nieskończoność — kasujemy te bardzo odległe */
+      const klucze=Object.keys(S.wedrowni);
+      if(klucze.length>40) klucze.slice(0,klucze.length-40).forEach(k=>delete S.wedrowni[k]);
+      save();
+      return p;
+    };
     const odkryte=Object.keys(S.odkryte||{});
     if(odkryte.length>4){
       /* pola w wygodnym zasięgu: dość blisko, żeby dojść, dość daleko,
@@ -1429,19 +1453,19 @@ const Bud={
         if(d>70 && d<400) kand.push(p);
         if(kand.length>60) break;
       }
-      if(kand.length) return kand[Math.floor(r()*kand.length)];
+      if(kand.length) return zapisz(kand[Math.floor(r()*kand.length)]);
       /* nic w zasięgu — bierzemy najbliższe odkryte pole */
-      let naj=null, najD=1e9;
+      let najPole=null, najPoleD=1e9;
       for(const k of odkryte.slice(0,200)){
         const [a,b]=k.split('_').map(Number);
         const p={lat:a*KRATKA, lng:b*KRATKA};
         const d=dist(pos,p);
-        if(d>40 && d<najD){ najD=d; naj=p }
+        if(d>40 && d<najPoleD){ najPoleD=d; najPole=p }
       }
-      if(naj) return naj;
+      if(najPole) return zapisz(najPole);
     }
     /* nowy gracz bez odkrytej mapy — stawiamy blisko, w zasięgu spaceru */
-    return offset(pos, ri(r,0,359), ri(r,90,180));
+    return zapisz(offset(pos, ri(r,0,359), ri(r,90,180)));
   },
 
   /* Karczmy, w których czeka nagroda za ukończone zlecenie — pokazujemy je
