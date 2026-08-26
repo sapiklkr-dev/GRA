@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 2.7</title>
+<title>GeoRPG 3.0</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -127,13 +127,51 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 .zas{font-size:20px;text-align:center;line-height:1;opacity:.92;
   filter:drop-shadow(0 1px 3px #000c);animation:kiwa 3.2s ease-in-out infinite}
 @keyframes kiwa{50%{transform:rotate(9deg)}}
-.bud{display:grid;place-items:center;filter:drop-shadow(0 2px 5px #000e)}
+.bud{display:grid;place-items:center;filter:drop-shadow(0 2px 5px #000e);position:relative}
+.bud.zast{opacity:.88}
+.bud .qgotowe{position:absolute;top:-8px;right:-10px;font-size:15px;
+  filter:drop-shadow(0 0 5px #3fb950);animation:puls 1.6s ease-in-out infinite}
 .bud img{display:block}
 .qm{font-size:27px;text-align:center;filter:drop-shadow(0 2px 4px #000d)}
 #toast{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:800;
   background:#000c;border:1px solid var(--line);border-radius:10px;padding:11px 16px;
   font-size:13px;text-align:center;display:none;max-width:80%}
 kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11px}
+
+/* ---------- ekwipunek: sloty wokół postaci ---------- */
+.ekwGrid{display:grid;grid-template-columns:64px 1fr 64px;grid-template-rows:auto auto auto;
+  gap:8px;align-items:center;margin:6px 0 12px}
+.slot{background:#0d1117;border:1px solid var(--line);border-radius:10px;
+  height:64px;display:grid;place-items:center;position:relative;cursor:pointer;
+  transition:border-color .15s}
+.slot:active{background:#161b22}
+.slot.pusty{border-style:dashed;opacity:.55}
+.slot .ic{font-size:26px;line-height:1;display:grid;place-items:center}
+.slot .lbl{position:absolute;bottom:2px;left:0;right:0;text-align:center;
+  font-size:8px;color:var(--dim);letter-spacing:.02em}
+.slot .up{position:absolute;top:2px;right:4px;font-size:9px;font-weight:700;color:var(--gold)}
+.slot.r2{border-color:#3fb950}.slot.r3{border-color:#58a6ff}
+.slot.r4{border-color:#bc8cff;box-shadow:0 0 8px #bc8cff44}
+.slot.r5{border-color:#e3b341;box-shadow:0 0 10px #e3b34155}
+.postacBox{display:grid;place-items:center;gap:2px;padding:4px;
+  background:radial-gradient(circle at 50% 40%,#1c2430,#0d1117 70%);
+  border:1px solid var(--line);border-radius:12px;min-height:150px}
+.postacBox .av{font-size:56px;line-height:1}
+.postacBox .nm{font-size:12px;font-weight:600}
+.postacBox .lv{font-size:10px;color:var(--dim)}
+
+/* ---------- plecak: kafelki ---------- */
+.bagGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(58px,1fr));gap:6px;margin-bottom:10px}
+.kafel{background:#0d1117;border:1px solid var(--line);border-radius:9px;
+  aspect-ratio:1;display:grid;place-items:center;position:relative;cursor:pointer}
+.kafel:active{background:#161b22}
+.kafel.r2{border-color:#3fb95088}.kafel.r3{border-color:#58a6ff88}
+.kafel.r4{border-color:#bc8cff;box-shadow:0 0 7px #bc8cff33}
+.kafel.r5{border-color:#e3b341;box-shadow:0 0 9px #e3b34144}
+.kafel .ic{font-size:24px;line-height:1}
+.kafel .up{position:absolute;top:1px;right:3px;font-size:9px;font-weight:700;color:var(--gold)}
+.kafel .lep{position:absolute;bottom:1px;left:3px;font-size:9px;color:var(--xp)}
+.kafel.wolny{border-style:dashed;opacity:.25}
 .mgla-plotno{position:absolute;left:0;top:0;pointer-events:none;z-index:399}
 .etykStrefa{font-size:10px;font-weight:700;text-align:center;white-space:nowrap;
   background:#0d1117d9;border:1px solid;border-radius:999px;padding:2px 8px;
@@ -241,7 +279,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="2.7";
+const WERSJA="3.0";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -571,13 +609,20 @@ const BAZY=[
   {n:"Zbroja",em:"🥼",slot:"tors",atk:0,def:3},
   {n:"Amulet",em:"📿",slot:"amulet",atk:2,def:2}
 ];
-function rollItem(r,lvl,rareBoost){
+/* maxRar ogranicza, co w ogóle może wypaść:
+     2 (niezwykły) — zwykłe potwory
+     3 (rzadki)    — alfy
+     4 (epicki)    — elity
+     5 (legendarny)— prastare bestie
+   Dzięki temu najlepszy sprzęt pochodzi wyłącznie z groźnych przeciwników
+   albo z sklepu za bardzo duże pieniądze. */
+function rollItem(r,lvl,rareBoost,maxRar,minRar){
   const base=pick(r,BAZY);
   let roll=r()/Math.max(1,rareBoost);   // niższy roll = lepszy przedmiot
-  /* Progi zaostrzone: legendarny 0.4% zamiast 2%, epicki 1.8% zamiast 5.7%.
-     Rzadkie znaleziska mają być wydarzeniem, a nie codziennością. */
   let ri_=0;
   if(roll<0.004)ri_=4; else if(roll<0.022)ri_=3; else if(roll<0.09)ri_=2; else if(roll<0.30)ri_=1;
+  if(maxRar!=null) ri_=Math.min(ri_, maxRar-1);
+  if(minRar!=null) ri_=Math.max(ri_, minRar-1);   // wymuszona rzadkość (oferta sklepu)
   const rar=RAR[ri_];
   const sc=(1+lvl*0.12)*rar.m;
   return{id:Math.random().toString(36).slice(2,9),n:rar.n+" "+base.n.toLowerCase(),em:base.em,
@@ -776,28 +821,44 @@ const UI={
   },
   charSheet(){
     const k=KLASY[S.klasa],st=stats(),nm=S.ewo?S.ewo:k.n;
-    let h=`<div style="text-align:center;font-size:46px">${S.ewo?evoEm():k.em}</div>
-    <div style="text-align:center;font-weight:600;margin-bottom:4px">${nm} · poz. ${S.lvl}</div>
+    const slot=(id,etyk)=>{
+      const it=S.eq[id];
+      if(!it) return `<div class="slot pusty"><div class="ic">▫️</div><div class="lbl">${etyk}</div></div>`;
+      return `<div class="slot r${it.rar}" onclick="Inv.pokaz('${it.id}','eq','${id}')">
+        <div class="ic">${icon(it.em,'items',bazaNazwa(it),30)}</div>
+        ${it.ulep?`<b class="up">+${it.ulep}</b>`:''}
+        <div class="lbl">${etyk}</div></div>`;
+    };
+    const tyt=S.tytul?`<span style="color:var(--gold)">${S.tytul}</span><br>`:'';
+    let h=`<div class="ekwGrid">
+      <div>${slot('glowa','hełm')}</div>
+      <div class="postacBox">
+        <div class="av">${S.ewo?evoEm():k.em}</div>
+        <div class="nm">${tyt}${nm}</div>
+        <div class="lv">poz. ${S.lvl} · ${Math.ceil(S.hp)}/${st.hpMax} życia</div>
+      </div>
+      <div>${slot('amulet','amulet')}</div>
+      <div>${slot('bron','broń')}</div>
+      <div class="stats" style="margin:0">
+        <div class="stat">Atak<b>${st.atk}</b></div>
+        <div class="stat">Obrona<b>${st.def}</b></div>
+        <div class="stat">Krytyk<b>${Math.round(st.kryt*100)}%</b></div>
+        <div class="stat">Unik<b>${Math.round((st.unik||0)*100)}%</b></div>
+      </div>
+      <div>${slot('tarcza','tarcza')}</div>
+      <div></div>
+      <div>${slot('tors','zbroja')}</div>
+      <div></div>
+    </div>
     <div class="stats">
-      <div class="stat">Życie<b>${Math.ceil(S.hp)} / ${st.hpMax}</b></div>
-      <div class="stat">Atak<b>${st.atk}</b></div>
-      <div class="stat">Obrona<b>${st.def}</b></div>
-      <div class="stat">Krytyk<b>${Math.round(st.kryt*100)}%</b></div>
-      <div class="stat">Unik<b>${Math.round((st.unik||0)*100)}%</b></div>
       <div class="stat">Doświadczenie<b>${S.xp} / ${xpNeed(S.lvl)}</b></div>
       <div class="stat">Złoto<b>${S.gold}</b></div>
       <div class="stat">Przejściowo<b>${(S.dystans/1000).toFixed(2)} km</b></div>
       <div class="stat">Pokonanych<b>${S.zabite}</b></div>
       <div class="stat">Odkryty teren<b>${Mgla.ile()} pól</b></div>
       <div class="stat">Zebrane surowce<b>${S.zebrane||0}</b></div>
-    </div>
-    <div class="muted" style="margin-bottom:8px">Założone:</div>`;
-    for(const s in S.eq){const it=S.eq[s];
-      h+=`<div class="item"><div class="em">${it?it.em:'▫️'}</div><div class="t">
-      <b class="${it?'rar'+it.rar:''}">${it?it.n:'— pusty —'}</b>
-      <small>${s}${it?` · +${it.atk} atk · +${it.def} obr`:''}</small></div>
-      ${it?`<button class="off" onclick="Inv.unequip('${s}')">Zdejmij</button>`:''}</div>`;}
-    /* ROZWÓJ — punkty do rozdania */
+    </div>`;
+    /* ROZWÓJ */
     const wolne=punktyDoWydania();
     h+=`<div class="sfhdr"><span>Rozwój</span>
       <small>${wolne?`<b style="color:var(--xp)">${wolne} punktów do rozdania</b>`:'brak punktów'}</small></div>`;
@@ -808,9 +869,20 @@ const UI={
         <small>${c.opis}</small></div>
         ${wolne?`<button onclick="Postac.dodaj('${ck}')">+1</button>`:''}</div>`;
     }
-    if(wolne) h+=`<p class="muted">Punktów nie da się cofnąć — rozdzielaj z rozwagą.
-      Za każdy poziom dostajesz ${PKT_NA_POZIOM}.</p>`;
     if(S.lvl<10)h+=`<p class="muted">Ewolucja klasy na poziomie 10.</p>`;
+    /* dokąd iść po usługi */
+    if(Bud.lista&&Bud.lista.length){
+      h+=`<div class="sfhdr"><span>W okolicy</span><small>odległość</small></div>`;
+      [...Bud.lista].sort((a,b)=>a.d-b.d).forEach(b=>{
+        const R=RODZAJE[b.rodzaj]||{em:'📍',n:b.rodzaj};
+        const d=Math.round(b.d), blisko=d<=ZASIEG_BUD;
+        h+=`<div class="item"><div class="em">${R.em}</div><div class="t">
+          <b>${b.nazwa||R.n}</b><small>${R.n}${b.zastepczy?' · wędrowny':''}
+          ${b.questy?' · <span style="color:var(--xp)">nagroda czeka</span>':''}</small></div>
+          <div style="font-size:12px;font-weight:600;color:${blisko?'var(--xp)':'var(--dim)'}">
+            ${blisko?'jesteś na miejscu':(d<1000?d+' m':(d/1000).toFixed(1)+' km')}</div></div>`;
+      });
+    }
     h+=`<div class="acts" style="margin-top:10px">
       <button class="btn" onclick="UI.open('osiag')">🏆 Osiągnięcia</button>
       <button class="btn" onclick="UI.open('dzienne')">📅 Zadanie dnia</button></div>
@@ -825,41 +897,40 @@ const UI={
     const pelny=S.bag.length>=LIMIT_PLECAKA;
     let h=`<div class="stats">
       <div class="stat">Plecak<b style="color:${pelny?'var(--hp)':'inherit'}">${S.bag.length} / ${LIMIT_PLECAKA}</b></div>
-      <div class="stat">Sakwa (surowce)<b>${iloscMat()} szt. · ${wartoscMat()} złota</b></div>
+      <div class="stat">Sakwa<b>${iloscMat()} szt. · ${wartoscMat()} złota</b></div>
     </div>`;
-    if(pelny) h+=`<p class="muted" style="color:var(--hp)">Plecak pełny — nowy łup przepada.
-      Sprzedaj coś w sklepie albo wyrzuć.</p>`;
+    if(pelny) h+=`<p class="muted" style="color:var(--hp)">Plecak pełny — nowy łup przepada.</p>`;
     /* MIKSTURY */
     h+=`<div class="sfhdr"><span>Mikstury</span><small>${iloscFlasz()} szt.</small></div>`;
     let maM=false;
     MIKSTURY.forEach(m=>{
       const ile=(S.flasz||{})[m.id]||0; if(!ile) return; maM=true;
-      const opis = m.proc ? `przywraca ${Math.round(m.proc*100)}% życia` : `przywraca ${m.hp} życia`;
+      const opis=m.proc?`+${Math.round(m.proc*100)}% życia`:`+${m.hp} życia`;
       h+=`<div class="item"><div class="em">${m.em}</div><div class="t">
         <b>${m.n}</b><small>${opis} · masz ${ile}</small></div>
         <button onclick="Inv.pij('${m.id}')">Wypij</button></div>`;
     });
-    if(!maM) h+=`<p class="muted">Brak mikstur. Kupisz je w sklepie.</p>`;
-    /* EKWIPUNEK */
-    h+=`<div class="sfhdr"><span>Ekwipunek</span><small>sprzedaż tylko w sklepie</small></div>`;
-    if(!S.bag.length) h+=`<p class="muted">Plecak pusty. Bij potwory.</p>`;
+    if(!maM) h+=`<p class="muted">Brak mikstur. Kupisz je w sklepie albo uwarzysz u alchemika.</p>`;
+    /* PLECAK JAKO SIATKA */
+    h+=`<div class="sfhdr"><span>Ekwipunek</span><small>dotknij, żeby zobaczyć</small></div>
+      <div class="bagGrid">`;
     const posort=[...S.bag].sort((a,b)=>b.rar-a.rar||b.val-a.val);
     posort.forEach(it=>{
       const zal=S.eq[it.slot];
-      const lepszy = !zal || (it.atk+it.def)>(zal.atk+zal.def);
-      h+=`<div class="item"><div class="em">${icon(it.em,'items',bazaNazwa(it),26)}</div>
-        <div class="t"><b class="rar${it.rar}">${it.n}${it.ulep?' +'+it.ulep:''}</b>
-        <small>${it.slot} · +${it.atk} atk · +${it.def} obr
-        ${lepszy?'<span style="color:var(--xp)"> · lepszy niż założony</span>':''}</small></div>
-        <button onclick="Inv.equip('${it.id}')">Załóż</button>
-        <button class="off" onclick="Inv.wyrzuc('${it.id}')">✕</button></div>`;
+      const lepszy=!zal||(it.atk+it.def)>(zal.atk+zal.def);
+      h+=`<div class="kafel r${it.rar}" onclick="Inv.pokaz('${it.id}','bag')" title="${it.n}">
+        <div class="ic">${icon(it.em,'items',bazaNazwa(it),26)}</div>
+        ${it.ulep?`<b class="up">+${it.ulep}</b>`:''}
+        ${lepszy?'<b class="lep">▲</b>':''}</div>`;
     });
+    for(let i=S.bag.length;i<LIMIT_PLECAKA;i++) h+=`<div class="kafel wolny"></div>`;
+    h+=`</div>`;
     /* SUROWCE */
     const klucze=Object.keys(S.mat||{});
     h+=`<div class="sfhdr"><span>Sakwa</span><small>nie zajmuje miejsca</small></div>`;
     if(!klucze.length) h+=`<p class="muted">Pusto. Surowce wypadają z potworów,
-      a zioła i minerały zbierzesz z mapy.</p>`;
-    klucze.sort((a,b)=>S.mat[b].ile*S.mat[b].val - S.mat[a].ile*S.mat[a].val).forEach(k=>{
+      zioła i minerały zbierzesz z mapy.</p>`;
+    klucze.sort((a,b)=>S.mat[b].ile*S.mat[b].val-S.mat[a].ile*S.mat[a].val).forEach(k=>{
       const m=S.mat[k];
       h+=`<div class="item"><div class="em">${m.em}</div><div class="t">
         <b>${k}</b><small>${m.ile} szt. · ${m.val} złota za sztukę</small></div>
@@ -874,15 +945,22 @@ const UI={
       — na mapie stoi na prawdziwym pubie albo barze w okolicy.</p>
       <p class="muted">Możesz prowadzić do trzech zadań naraz.</p>`;
     }else{
-      h=`<p class="muted">Zadania <b>${S.questy.length}/3</b>. Postęp liczy się sam
-      podczas gry.</p>`;
-      S.questy.forEach(q=>{
+      const got=S.questy.filter(q=>q.postep>=q.ile).length;
+      h=`<p class="muted">Zadań: <b>${S.questy.length}</b>${got?` · <b style="color:var(--xp)">${got} do odebrania</b>`:''}.
+      Postęp liczy się sam. Nagrodę odbierasz w karczmie, z której wziąłeś zlecenie —
+      taka karczma ma na mapie zielony znacznik ✅.</p>`;
+      [...S.questy].sort((a,b)=>(b.postep>=b.ile?1:0)-(a.postep>=a.ile?1:0)).forEach(q=>{
         const proc=Math.min(100,Math.round(q.postep/q.ile*100));
         let dod='';
         if(q.typ==='wyprawa'&&q.lat&&Game.pos)
           dod=` · ${Math.round(dist(Game.pos,{lat:q.lat,lng:q.lng}))} m stąd`;
         if(q.typ==='krajoznawcze'&&q.odwiedzone&&q.odwiedzone.length)
           dod=' · '+q.odwiedzone.map(b=>BIOMY[b]?BIOMY[b].em:'').join(' ');
+        if(q.postep>=q.ile&&q.zrodlo){
+          const dd=Game.pos?Math.round(dist(Game.pos,q.zrodlo)):0;
+          dod=` · <b style="color:var(--xp)">gotowe — wróć do: ${q.zrodlo.nazwa}
+            (${dd<1000?dd+' m':(dd/1000).toFixed(1)+' km'})</b>`;
+        }
         h+=`<div class="item"><div class="em">${q.em}</div><div class="t">
           <b>${q.tytul}</b><small>${q.opis}${dod}</small>
           <div class="bar xp" style="margin-top:5px"><i style="width:${proc}%"></i></div>
@@ -1026,7 +1104,7 @@ function refreshHUD(){
    podręcznej, więc każda zmiana automatycznie unieważnia stare zapisy. */
 const LAND_TAGI='^(forest|residential|commercial|industrial|retail|farmland|meadow|grass|cemetery)$';
 const NAT_TAGI='^(water|wood|wetland|grassland|peak)$';
-const SZABLON_ZAPYTAN='jedno-2xout|poi1000/200|land500/80|klas3-alchemik|'+LAND_TAGI+'|'+NAT_TAGI;
+const SZABLON_ZAPYTAN='jedno-2xout|poi1000/200|land500/80|klas4-szerzej|'+LAND_TAGI+'|'+NAT_TAGI;
 
 const OSM={
   R:1200,            // promień pobieranego obszaru
@@ -1168,10 +1246,10 @@ const OSM={
       // --- budynki ---
       let rodz=null;
       if(/^(pub|bar|restaurant|cafe|fast_food)$/.test(t.amenity||'')) rodz='karczma';
-      else if(/^(chemist|herbalist|health_food|nutrition_supplements)$/.test(t.shop||'')
-        || t.amenity==='pharmacy' || t.healthcare==='pharmacy')
+      else if(/^(chemist|herbalist|health_food|nutrition_supplements|florist|garden_centre|medical_supply|tea|spices)$/.test(t.shop||'')
+        || t.amenity==='pharmacy' || t.healthcare==='pharmacy' || t.shop==='farm')
         rodz='alchemik';
-      else if(t.craft || /^(hardware|doityourself|car_repair|bicycle|locksmith|tyres|trade|paint|tool_hire|motorcycle_repair|agrarian)$/.test(t.shop||''))
+      else if(t.craft || /^(hardware|doityourself|car_repair|bicycle|locksmith|tyres|trade|paint|tool_hire|motorcycle_repair|agrarian|car_parts|electrical|frame|glaziery)$/.test(t.shop||''))
         rodz='kowal';
       else if(t.shop) rodz='sklep';
       if(rodz) this.poi.push([+la.toFixed(5),+lo.toFixed(5),rodz]);   // nazwy nadajemy własne
@@ -1244,7 +1322,7 @@ const RODZAJE={
   obozowisko:{n:"Obozowisko", em:"⛺", opis:"Odpoczynek przy ognisku"}
 };
 const KOSZT_DOMU=500;
-const ZASIEG_BUD=40;      // metrów — do sklepu trzeba faktycznie dojść
+const ZASIEG_BUD=55;      // metrów — do sklepu trzeba faktycznie dojść
 const ODSTEP_BUD=350;     // minimalny odstęp między budynkami — inaczej w centrum
                           // miasta robi się ich kilka w zasięgu wzroku
 
@@ -1287,12 +1365,28 @@ const Bud={
     let out=[];
     for(const r in limit){
       const kand=(grupy[r]||[]).sort((a,b)=>a.d-b.d);
-      for(const k of kand){
-        if(out.length>=Object.keys(limit).length) break;
-        /* pomiń, jeśli za blisko czegoś już wybranego */
-        if(out.some(b=>dist(b,k)<ODSTEP_BUD)) continue;
-        out.push(k);
-        break;                      // po jednym z rodzaju
+      if(!kand.length) continue;
+      /* Najpierw szukamy takiego, który zachowuje odstęp od już wybranych. */
+      let wyb=kand.find(k=>!out.some(b=>dist(b,k)<ODSTEP_BUD));
+      /* Jeśli odstęp wyklucza WSZYSTKIE, bierzemy najbliższy mimo to.
+         Wcześniej taki rodzaj po prostu znikał — jeśli jedyny kowal w okolicy
+         stał obok sklepu, gracz nie miał gdzie ulepszać sprzętu. Lepszy
+         budynek blisko innego niż brak budynku. */
+      if(!wyb) wyb=kand[0];
+      out.push(wyb);
+    }
+    /* Brakujące rodzaje uzupełniamy wersją wędrowną, żeby ZAWSZE dało się
+       kupić, ulepszyć i uwarzyć — niezależnie od tego, co jest w okolicy
+       otagowane w OSM. */
+    if(out.length){
+      for(const r in limit){
+        if(out.some(b=>b.rodzaj===r)) continue;
+        const p=this.dostepneMiejsce(pos, r);
+        out.push({...p, rodzaj:r, zastepczy:true, d:dist(pos,p),
+          nazwa: r==='kowal' ? 'Wędrowny kowal'
+               : r==='alchemik' ? 'Wóz zielarki'
+               : r==='sklep' ? 'Wóz kupiecki'
+               : 'Obozowisko przy trakcie'});
       }
     }
     out.forEach(b=>{ if(!b.nazwa) b.nazwa=nazwijBudynek(b.rodzaj,b.lat,b.lng) });
@@ -1317,9 +1411,62 @@ const Bud={
     }
     return out;
   },
+  /* Wędrowny budynek stawiamy tam, gdzie gracz JUŻ BYŁ — czyli na odkrytym
+     polu mgły. Losowy punkt potrafił wypaść w środku bloku, na terenie
+     zamkniętym albo w wodzie i po prostu nie dało się do niego dojść.
+     Skoro gracz tamtędy przeszedł, na pewno jest tam dostęp. */
+  dostepneMiejsce(pos, rodzaj){
+    const r=rng(hash('zast|'+cellId(pos)+'|'+rodzaj));
+    const odkryte=Object.keys(S.odkryte||{});
+    if(odkryte.length>4){
+      /* pola w wygodnym zasięgu: dość blisko, żeby dojść, dość daleko,
+         żeby nie stały jeden na drugim */
+      const kand=[];
+      for(const k of odkryte){
+        const [a,b]=k.split('_').map(Number);
+        const p={lat:a*KRATKA, lng:b*KRATKA};
+        const d=dist(pos,p);
+        if(d>70 && d<400) kand.push(p);
+        if(kand.length>60) break;
+      }
+      if(kand.length) return kand[Math.floor(r()*kand.length)];
+      /* nic w zasięgu — bierzemy najbliższe odkryte pole */
+      let naj=null, najD=1e9;
+      for(const k of odkryte.slice(0,200)){
+        const [a,b]=k.split('_').map(Number);
+        const p={lat:a*KRATKA, lng:b*KRATKA};
+        const d=dist(pos,p);
+        if(d>40 && d<najD){ najD=d; naj=p }
+      }
+      if(naj) return naj;
+    }
+    /* nowy gracz bez odkrytej mapy — stawiamy blisko, w zasięgu spaceru */
+    return offset(pos, ri(r,0,359), ri(r,90,180));
+  },
+
+  /* Karczmy, w których czeka nagroda za ukończone zlecenie — pokazujemy je
+     na mapie ZAWSZE, także daleko poza normalnym zasięgiem budynków.
+     Inaczej gracz kończy zadanie i nie ma pojęcia, dokąd wracać. */
+  karczmyZNagroda(){
+    const wynik=[];
+    (S.questy||[]).forEach(q=>{
+      if(q.postep<q.ile||!q.zrodlo) return;
+      if(wynik.some(k=>dist(k,q.zrodlo)<50)) return;
+      wynik.push({lat:q.zrodlo.lat, lng:q.zrodlo.lng, rodzaj:'karczma',
+        nazwa:q.zrodlo.nazwa, questy:true, zdalna:true,
+        d:Game.pos?dist(Game.pos,q.zrodlo):0});
+    });
+    return wynik;
+  },
   rysuj(){
     if(!Game.map||!Game.pos) return;
-    const nowe=this.wybierz(Game.pos); this.lista=nowe;
+    let nowe=this.wybierz(Game.pos);
+    /* dokładamy karczmy z nagrodą, o ile nie ma ich już na liście */
+    this.karczmyZNagroda().forEach(k=>{
+      const jest=nowe.find(b=>dist(b,k)<50);
+      if(jest) jest.questy=true; else nowe.push(k);
+    });
+    this.lista=nowe;
     const zyje={};
     nowe.forEach(b=>{
       const k=b.rodzaj+'|'+b.lat.toFixed(5)+'|'+b.lng.toFixed(5);
@@ -1327,7 +1474,8 @@ const Bud={
       if(this.markery[k]) return;
       const R=RODZAJE[b.rodzaj];
       const mk=L.marker([b.lat,b.lng],{icon:L.divIcon({className:'',
-        html:`<div class="bud">${icon(R.em,'ui',b.rodzaj,34)}</div>`,
+        html:`<div class="bud${b.zastepczy?' zast':''}">${icon(R.em,'ui',b.rodzaj,34)}
+          ${b.questy?'<b class="qgotowe">✅</b>':''}</div>`,
         iconSize:[38,38],iconAnchor:[19,19]})})
         .addTo(Game.map).on('click',()=>Bud.wejdz(b));
       this.markery[k]=mk;
@@ -1346,6 +1494,7 @@ const Bud={
     }
     this.aktualny=b;
     if(b.awaryjny) toast('⛺ Miejsce polowe — mapa okolicy niedostępna',1800);
+    else if(b.zastepczy) toast('🛒 Wędrowny — w okolicy nie ma takiego miejsca na mapie',2200);
     if(b.rodzaj==='karczma'||b.rodzaj==='obozowisko') return Karczma.otworz(b);
     if(b.rodzaj==='kowal') return Kowal.otworz(b);
     if(b.rodzaj==='alchemik') return Alchemik.otworz(b);
@@ -1359,7 +1508,9 @@ const Bud={
    więc sklep musi być tańszą alternatywą dla pewności, a nie głównym źródłem
    sprzętu. Stąd kupno = 3.5× wartość, sprzedaż = 0.4× wartość. */
 const przychodH = l => 155 + 82*l;
-const cenaKupna  = it => Math.round(it.val*3.5);
+/* Im rzadszy przedmiot, tym bardziej cena odjeżdża od wartości — epicki
+   w sklepie ma być decyzją na kilka godzin grania, nie zakupem po drodze. */
+const cenaKupna  = it => Math.round(it.val*3.5*(it.rar>=4?4.5:it.rar===3?1.6:1));
 const cenaSprzed = it => Math.round(it.val*0.4);
 /* Mikstury: stałe ceny niezależne od poziomu, za to różna moc.
    Gracz sam decyduje, czy stać go na dużą. */
@@ -1383,7 +1534,12 @@ const Sklep={
     const r=rng(hash('sklep|'+b.lat.toFixed(4)+'|'+b.lng.toFixed(4)+'|'+okno+'|'+S.lvl));
     const t=[];
     for(let i=0;i<8;i++){
-      const it=rollItem(r, Math.max(1,S.lvl+ri(r,-1,2)), 1+r()*0.5);
+      /* Ostatnie miejsce w ofercie bywa epickie — i wtedy jest GWARANTOWANE,
+         bo samo podniesienie limitu dawało epicki raz na sto odświeżeń.
+         Legendarnych nie kupisz w ogóle, tylko z prastarych bestii. */
+      const epicki = (i===7 && r()<0.4);
+      const it=rollItem(r, Math.max(1,S.lvl+ri(r,-1,2)), 1+r()*0.5,
+                        epicki?4:3, epicki?4:null);
       it.id='s'+i+'_'+okno; t.push(it);
     }
     return t;
@@ -2059,7 +2215,9 @@ const Fight={
     this.line(`<b>${m.n} pokonany!</b> +${xp} xp, +${gold} złota`,'g');
     let drop=null;
     if(Math.random()<0.35*m.rareBoost*st.lupMn){
-      drop=rollItem(r,S.lvl,m.rareBoost);
+      const limitRar = m.ranga.k==='boss' ? 5 : m.ranga.k==='elita' ? 4
+                     : m.ranga.k==='alfa' ? 3 : 2;
+      drop=rollItem(r,S.lvl,m.rareBoost,limitRar);
       if(S.bag.length>=LIMIT_PLECAKA){
         this.line(`Plecak pełny (${LIMIT_PLECAKA}) — <b>${drop.n}</b> zostaje na ziemi.`,'r');
       }else{
@@ -2133,9 +2291,43 @@ const Postac={
 
 /* ---------------- ekwipunek ---------------- */
 const Inv={
+  /* Okno przedmiotu — te same akcje dla kafelka w plecaku i slotu na postaci. */
+  pokaz(id, skad, slotId){
+    const it = skad==='eq' ? S.eq[slotId] : S.bag.find(x=>x.id===id);
+    if(!it) return;
+    const zal=S.eq[it.slot];
+    const roznica = zal&&skad==='bag' ? (it.atk+it.def)-(zal.atk+zal.def) : 0;
+    const nazwyRar=['Zwykły','Niezwykły','Rzadki','Epicki','Legendarny'];
+    let h=`<div style="text-align:center;padding:6px 0">
+      <div style="font-size:46px">${icon(it.em,'items',bazaNazwa(it),52)}</div>
+      <div class="rar${it.rar}" style="font-weight:700;margin-top:6px">
+        ${it.n}${it.ulep?' +'+it.ulep:''}</div>
+      <div class="muted">${nazwyRar[it.rar-1]} · ${it.slot}</div></div>
+      <div class="stats">
+        <div class="stat">Atak<b>+${it.atk}</b></div>
+        <div class="stat">Obrona<b>+${it.def}</b></div>
+        <div class="stat">Wartość<b>${cenaSprzed(it)} złota</b></div>
+        <div class="stat">Ulepszenia<b>${it.ulep||0}</b></div>
+      </div>`;
+    if(zal && skad==='bag' && zal.id!==it.id){
+      h+=`<div class="sfhdr"><span>Porównanie</span><small>z założonym</small></div>
+        <div class="item"><div class="em">${icon(zal.em,'items',bazaNazwa(zal),24)}</div>
+        <div class="t"><b class="rar${zal.rar}">${zal.n}${zal.ulep?' +'+zal.ulep:''}</b>
+        <small>+${zal.atk} atk · +${zal.def} obr</small></div>
+        <div style="font-size:12px;font-weight:700;color:${roznica>0?'var(--xp)':roznica<0?'var(--hp)':'var(--dim)'}">
+          ${roznica>0?'+':''}${roznica}</div></div>`;
+    }
+    h+=`<div class="acts" style="margin-top:10px">`;
+    if(skad==='bag') h+=`<button class="btn" onclick="Inv.equip('${it.id}')">✅ Załóż</button>
+      <button class="btn" onclick="Inv.wyrzuc('${it.id}')">🗑️ Wyrzuć</button>`;
+    else h+=`<button class="btn" onclick="Inv.unequip('${slotId}')">↩️ Zdejmij</button>
+      <button class="btn" onclick="UI.charSheet()">← Wróć</button>`;
+    h+=`</div><p class="muted">Sprzedaż tylko w sklepie. Ulepszanie u kowala.</p>`;
+    UI.generic(it.n, h);
+  },
   equip(id){const i=S.bag.findIndex(x=>x.id===id);if(i<0)return;const it=S.bag[i];
     const old=S.eq[it.slot];S.eq[it.slot]=it;S.bag.splice(i,1);if(old)S.bag.push(old);
-    save();UI.bagSheet();refreshHUD();toast(`Założono: ${it.n}`)},
+    save();UI.charSheet();refreshHUD();toast(`Założono: ${it.n}`)},
   unequip(slot){const it=S.eq[slot];if(!it)return;
     if(S.bag.length>=LIMIT_PLECAKA) return toast("Plecak pełny — nie ma gdzie tego schować.");
     S.bag.push(it);S.eq[slot]=null;save();UI.charSheet();refreshHUD()},
