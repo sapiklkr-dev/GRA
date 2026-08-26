@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 2.5</title>
+<title>GeoRPG 2.6</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -135,6 +135,11 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
   font-size:13px;text-align:center;display:none;max-width:80%}
 kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11px}
 .mgla-plotno{position:absolute;left:0;top:0;pointer-events:none;z-index:399}
+.etykStrefa{font-size:10px;font-weight:700;text-align:center;white-space:nowrap;
+  background:#0d1117d9;border:1px solid;border-radius:999px;padding:2px 8px;
+  backdrop-filter:blur(4px)}
+.domek{font-size:22px;text-align:center;line-height:1;
+  filter:drop-shadow(0 0 6px #58a6ff) drop-shadow(0 2px 4px #000)}
 /* Znacznik wersji zawsze na wierzchu — bez niego nie da się stwierdzić,
    czy przeglądarka nie podaje starego pliku z pamięci podręcznej. */
 #wer{position:absolute;right:8px;z-index:700;cursor:pointer;
@@ -232,7 +237,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="2.5";
+const WERSJA="2.6";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -949,7 +954,8 @@ function refreshHUD(){
     <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>
     <div class="chip klik" onclick="Mgla.przelacz()">🌫️ <b>${Mgla.ile()}</b> odkrytych</div>
     ${(()=>{const z=strefaDla(Game.pos);const d=S.dom&&Game.pos?Math.round(dist(S.dom,Game.pos)):0;
-      return `<div class="chip" style="border-color:${z.kol};color:${z.kol}">${z.em} <b>${z.n}</b>${d?` · ${d<1000?d+' m':(d/1000).toFixed(1)+' km'} od domu`:''}</div>`})()}
+      return `<div class="chip klik" onclick="StrefyMapa.przelacz()"
+        style="border-color:${z.kol};color:${z.kol}">${z.em} <b>${z.n}</b>${d?` · ${d<1000?d+' m':(d/1000).toFixed(1)+' km'} od domu`:''} ⭕</div>`})()}
     <div class="chip klik" onclick="diagnostyka()" style="${OSM.stan==='błąd'?'border-color:var(--hp);color:var(--hp)':(OSM.poi.length?'':'border-color:var(--gold);color:var(--gold)')}">🗺️ <b>${OSM.stan}</b>${OSM.stan==='błąd'?' · brak połączenia':(OSM.poi.length?` · ${Bud.lista.length} bud.`:' · brak POI')} 🩺</div>
     ${Predkosc.akt>8?`<div class="chip" style="${Predkosc.jedzie()?'border-color:var(--hp);color:var(--hp)':''}">
       ${Predkosc.jedzie()?'🚗':'🏃'} <b>${Math.round(Predkosc.akt)} km/h</b>${Predkosc.jedzie()?' · zablokowane':''}</div>`:''}`:
@@ -2084,7 +2090,7 @@ const Karczma={
     if(S.gold<KOSZT_DOMU) return toast("Za mało złota.");
     S.gold-=KOSZT_DOMU;
     S.dom={lat:this.b.lat,lng:this.b.lng};
-    Zagrozenie.ostatnia=null;
+    Zagrozenie.ostatnia=null; StrefyMapa.rysuj();
     save(); refreshHUD(); this.otworz(this.b);
     toast(`🏠 <b>Nowy dom: ${this.b.nazwa}</b><br>
       <span style="color:#8b949e">Strefy liczą się teraz od tego miejsca</span>`,3000);
@@ -2314,6 +2320,45 @@ function blokadaJazdy(){
   return true;
 }
 
+/* ================= GRANICE STREF NA MAPIE =================
+   Okręgi wokół domu pokazujące, gdzie kończy się jedna strefa, a zaczyna
+   następna — żeby od razu było widać, jak daleko można się zapuścić
+   i co czeka dalej. */
+const StrefyMapa={
+  warstwy:[], widoczne:true,
+  rysuj(){
+    if(!Game.map) return;
+    this.warstwy.forEach(w=>{ try{Game.map.removeLayer(w)}catch(e){} });
+    this.warstwy=[];
+    if(!S.dom||!this.widoczne) return;
+    /* od największej do najmniejszej, żeby mniejsze rysowały się na wierzchu */
+    [...STREFY].slice().reverse().forEach(z=>{
+      if(!z.od) return;
+      const kolo=L.circle([S.dom.lat,S.dom.lng],{
+        radius:z.od, color:z.kol, weight:2, opacity:0.55,
+        dashArray:'10 10', fill:true, fillColor:z.kol, fillOpacity:0.035,
+        interactive:false
+      }).addTo(Game.map);
+      this.warstwy.push(kolo);
+      /* podpis na północnej krawędzi okręgu */
+      const et=offset(S.dom,0,z.od);
+      const opis=L.marker([et.lat,et.lng],{interactive:false,icon:L.divIcon({className:'',
+        html:`<div class="etykStrefa" style="color:${z.kol};border-color:${z.kol}">
+          ${z.em} ${z.n}</div>`, iconSize:[110,20], iconAnchor:[55,10]})}).addTo(Game.map);
+      this.warstwy.push(opis);
+    });
+    /* dom */
+    const d=L.marker([S.dom.lat,S.dom.lng],{interactive:false,icon:L.divIcon({className:'',
+      html:'<div class="domek">🏠</div>',iconSize:[26,26],iconAnchor:[13,13]})}).addTo(Game.map);
+    this.warstwy.push(d);
+  },
+  przelacz(){
+    this.widoczne=!this.widoczne;
+    this.rysuj();
+    toast(this.widoczne?'⭕ Granice stref widoczne':'⭕ Granice stref ukryte');
+  }
+};
+
 /* ================= ZASADZKI =================
    W czerwonej i czarnej strefie potwory potrafią zaatakować same, gdy
    podejdziesz zbyt blisko — pomysł Krzyśka. Ostrzeżenie przy wejściu do
@@ -2463,6 +2508,7 @@ const Game={
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(this.map);
     this.map.on('dragstart',()=>this.follow=false);
     Mgla.init();
+    setTimeout(()=>StrefyMapa.rysuj(),300);
     this.map.on('click',e=>{if(Sim.on)this.setPos({lat:e.latlng.lat,lng:e.latlng.lng},5,false)});
 
     if(load()){this.boot()}
@@ -2521,7 +2567,7 @@ const Game={
     }
     if(!Sim.on) Predkosc.dodaj(p,now);
     if(!this.pos || dist(this.pos,p)>8) this.ostatniRuch=now;
-    if(!S.dom){ S.dom={lat:p.lat,lng:p.lng}; save(); }
+    if(!S.dom){ S.dom={lat:p.lat,lng:p.lng}; save(); StrefyMapa.rysuj(); }
     this.pos=p;this.lastT=now;
     if(!this.me){
       this.me=L.marker([p.lat,p.lng],{icon:L.divIcon({className:'',html:'<div class="me"></div>',
