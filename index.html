@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoRPG 2.6</title>
+<title>GeoRPG 2.7</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -138,6 +138,9 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 .etykStrefa{font-size:10px;font-weight:700;text-align:center;white-space:nowrap;
   background:#0d1117d9;border:1px solid;border-radius:999px;padding:2px 8px;
   backdrop-filter:blur(4px)}
+.legow{font-size:22px;text-align:center;line-height:1;position:relative;
+  filter:drop-shadow(0 0 7px #bc8cff) drop-shadow(0 2px 4px #000)}
+.legow b{position:absolute;bottom:-6px;right:-8px;font-size:13px}
 .domek{font-size:22px;text-align:center;line-height:1;
   filter:drop-shadow(0 0 6px #58a6ff) drop-shadow(0 2px 4px #000)}
 /* Znacznik wersji zawsze na wierzchu — bez niego nie da się stwierdzić,
@@ -212,6 +215,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
   </div>
   <div id="log"></div>
   <div class="acts" id="akcje"></div>
+  <div class="acts" id="umiej" style="margin-top:7px"></div>
   <div class="acts" style="margin-top:7px">
     <button class="btn" onclick="Fight.mikstura()" id="btnMikst">🧪 Mikstura</button>
     <button class="btn" onclick="Fight.tryFlee()">🏃 Ucieczka</button>
@@ -237,7 +241,7 @@ kbd{background:#21262d;border:1px solid var(--line);border-radius:4px;padding:1p
 
 /* Wersja widoczna w grze — żeby od razu było wiadomo, czy przeglądarka
    nie serwuje starego pliku z pamięci podręcznej. */
-const WERSJA="2.6";
+const WERSJA="2.7";
 
 /* ---------------- deterministyczny RNG (mulberry32 + hash) ------------ */
 function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h>>>0}
@@ -439,7 +443,7 @@ const GROW=0.13;     // przyrost statystyk na poziom (proporcjonalny → klasy n
 const ARMK=60;       // stała pancerza: redukcja = def/(def+ARMK*g)
 const MOBARM=0.15;   // pancerz potwora
 const MHP=108;       // bazowe HP potwora (dostrojone pod nowy system akcji)
-const MDMG=15.24;    // bazowe obrażenia potwora (dostrojone pod nowy system akcji)
+const MDMG=20.0;     // bazowe obrażenia potwora (dostrojone pod nowy system akcji)
 const ELITA=1.25;    // mnożnik elity
 const gScale=l=>1+(l-1)*GROW;
 /* Potwory skalują się tak jak gracz RAZEM z punktami rozwoju. Bez tego
@@ -668,6 +672,48 @@ const UI={
     if(what==='quest')return this.questSheet();
     if(what==='help')return this.helpSheet();
     if(what==='best')return this.bestSheet();
+    if(what==='dzienne')return this.dzienneSheet();
+    if(what==='osiag')return this.osiagSheet();
+  },
+  dzienneSheet(){
+    const st=Dzienne.stan(), n=Dzienne.nagroda(), s=S.seria||1;
+    const proc=Math.round(st.postep/st.z.ile*100);
+    let h=`<div class="stats">
+      <div class="stat">Seria dni<b style="color:${s>1?'var(--gold)':'inherit'}">🔥 ${s}</b></div>
+      <div class="stat">Do bonusu<b>${7-(s%7||7)} dni</b></div></div>
+      <div class="item" style="border-color:${st.gotowe?'var(--xp)':'var(--line)'}">
+        <div class="em">${st.z.em}</div><div class="t">
+        <b>${st.z.n}</b>
+        <div class="bar xp" style="margin-top:5px"><i style="width:${proc}%"></i></div>
+        <small>${st.postep} / ${st.z.ile} · nagroda ${n.xp} xp · ${n.zloto} złota</small></div>
+        ${st.odebrane?'<button class="off">odebrane</button>'
+          :st.gotowe?'<button onclick="Dzienne.odbierz()">Odbierz</button>':''}</div>
+      <p class="muted">Nowe zadanie każdego dnia o północy. Seria rośnie, jeśli
+      zagrasz nazajutrz — im dłuższa, tym większa nagroda.
+      Co siódmy dzień dostajesz dużą miksturę.</p>`;
+    if(s>=3) h+=`<p class="muted" style="color:var(--gold)">🔥 Grasz ${s} dni z rzędu —
+      nie przerywaj teraz.</p>`;
+    this.generic("Zadanie dnia",h);
+  },
+  osiagSheet(){
+    const zd=Osiagniecia.zdobyte();
+    let h=`<p class="muted">Zdobyte: <b>${zd.length}</b> z <b>${OSIAGNIECIA.length}</b>.
+      Kliknij zdobyty tytuł, żeby nosić go przy imieniu.</p>`;
+    if(S.tytul) h+=`<p class="muted">Nosisz tytuł: <b style="color:var(--gold)">${S.tytul}</b></p>`;
+    OSIAGNIECIA.forEach(o=>{
+      const mam=(S.osiag||{})[o.id];
+      const ile=Math.min(o.licz(),o.ile);
+      const proc=Math.round(ile/o.ile*100);
+      const nosi=S.tytul===o.tyt;
+      h+=`<div class="item" style="${mam?'border-color:var(--gold)':''}${nosi?';background:#1c2129':''}">
+        <div class="em" style="${mam?'':'opacity:.3'}">${o.em}</div><div class="t">
+        <b style="${mam?'color:var(--gold)':''}">${o.n}</b>
+        <small>${o.opis}${mam?'':` · ${ile}/${o.ile}`}</small>
+        ${mam?'':`<div class="bar xp" style="margin-top:5px"><i style="width:${proc}%"></i></div>`}</div>
+        ${mam&&o.tyt?`<button class="${nosi?'':'off'}" onclick="Osiagniecia.ustawTytul('${o.tyt}')">
+          ${nosi?'noszę':'noś'}</button>`:''}</div>`;
+    });
+    this.generic("Osiągnięcia",h);
   },
   bestSheet(){
     const zn=S.bestia||{}, ile=Object.keys(zn).length;
@@ -766,6 +812,9 @@ const UI={
       Za każdy poziom dostajesz ${PKT_NA_POZIOM}.</p>`;
     if(S.lvl<10)h+=`<p class="muted">Ewolucja klasy na poziomie 10.</p>`;
     h+=`<div class="acts" style="margin-top:10px">
+      <button class="btn" onclick="UI.open('osiag')">🏆 Osiągnięcia</button>
+      <button class="btn" onclick="UI.open('dzienne')">📅 Zadanie dnia</button></div>
+      <div class="acts" style="margin-top:6px">
       <button class="btn" onclick="UI.helpSheet()">❓ Jak grać</button>
       <button class="btn" onclick="diagnostyka()">🩺 Diagnostyka</button></div>
       <div class="acts" style="margin-top:6px">
@@ -941,7 +990,8 @@ function refreshHUD(){
   }
   const st=stats(),k=KLASY[S.klasa];
   $('avatar').textContent=S.ewo?evoEm():(k?k.em:'🗡️');
-  $('pname').textContent=(S.ewo||(k?k.n:'Bohater'))+' · poz. '+S.lvl;
+  const tyt=S.tytul?`<span style="color:var(--gold)">${S.tytul}</span> `:'';
+  $('pname').innerHTML=tyt+(S.ewo||(k?k.n:'Bohater'))+' · poz. '+S.lvl;
   $('gold').textContent=S.gold+' złota';
   $('hpb').style.width=Math.max(0,Math.min(100,S.hp/st.hpMax*100))+'%';
   $('xpb').style.width=Math.min(100,S.xp/xpNeed(S.lvl)*100)+'%';
@@ -952,6 +1002,10 @@ function refreshHUD(){
     <div class="chip">${w.pogoda.em} <b>${w.pogoda.n}</b>${w.temp!=null?` ${Math.round(w.temp)}°`:''}</div>
     <div class="chip">${w.sezon.em} <b>${w.sezon.n}</b></div>
     <div class="chip">🥾 <b>${(S.dystans/1000).toFixed(2)} km</b></div>
+    ${(()=>{const d=Dzienne.stan();
+      return `<div class="chip klik" onclick="UI.open('dzienne')"
+        style="${d.gotowe&&!d.odebrane?'border-color:var(--xp);color:var(--xp)':''}">
+        ${d.gotowe&&!d.odebrane?'✅':d.z.em} <b>${d.postep}/${d.z.ile}</b>${(S.seria||1)>1?` · 🔥${S.seria}`:''}</div>`})()}
     <div class="chip klik" onclick="Mgla.przelacz()">🌫️ <b>${Mgla.ile()}</b> odkrytych</div>
     ${(()=>{const z=strefaDla(Game.pos);const d=S.dom&&Game.pos?Math.round(dist(S.dom,Game.pos)):0;
       return `<div class="chip klik" onclick="StrefyMapa.przelacz()"
@@ -1684,6 +1738,15 @@ const Spawner={
       if(S.seen[key])continue;                  // już pokonany w tym cyklu
       if(this.markers[key])continue;
       const mob=this.zbuduj(r,m,{lat,lng},key,w);
+      /* legowisko tej samej sfery podbija przeciwnika i nagrody */
+      const leg=Legowiska.wPobliżu({lat,lng});
+      if(leg && leg.sfera===mob.sfera){
+        mob.b=Math.min(1.40, mob.b*1.12);
+        mob.lvl=mob.lvl+2;
+        mob.lootMn*=2; mob.xpMn*=1.5; mob.rareBoost*=1.8;
+        mob.legowisko=true;
+        mob.n='Z legowiska: '+mob.n;
+      }
       const mk=L.marker([lat,lng],{icon:L.divIcon({className:'',
         html:`<div class="mob${mob.ranga.k!=='zwykly'?' r-'+mob.ranga.k:''}"
               ${mob.afiks.kol?`style="filter:drop-shadow(0 0 5px ${mob.afiks.kol})"`:''}>
@@ -1695,6 +1758,7 @@ const Spawner={
       mk._mob=mob;this.markers[key]=mk;
     }
     this.zasoby();
+    Legowiska.rysuj();
     /* usuń stare bucket'y (powitalny ma własny cykl życia) */
     for(const k in this.markers){
       if(k.startsWith('start|')) continue;
@@ -1751,7 +1815,7 @@ const Spawner={
     S.zebraneId[key]=1; S.zebrane=(S.zebrane||0)+ile;
     if(this.zasMark[key]){ Game.map.removeLayer(this.zasMark[key]); delete this.zasMark[key] }
     Quest.poZbiorze(z);
-    save(); refreshHUD();
+    Osiagniecia.sprawdz(); save(); refreshHUD();
     toast(`${z.em} <b>${z.n}</b>${ile>1?' ×'+ile:''} — do sakwy`,1600);
   },
   kill(key){
@@ -1773,6 +1837,31 @@ const AKCJE={
   zwarcie:  {n:"Zwarcie",      em:"🛡️", cd:2, opis:"Blokuje cios, leczy, wzmacnia następną akcję."}
 };
 
+/* ================= UMIEJĘTNOŚCI KLASOWE =================
+   Po dwie na klasę, obie dostępne od początku, z własnym odnowieniem.
+   Do tej pory klasa wpływała tylko na liczby — teraz zmienia sposób walki:
+   wojownik przetrzymuje i kontruje, łowca rozbija serią, mag bije na wskroś. */
+const UMIEJETNOSCI={
+  wojownik:[
+    {id:'okrzyk', n:"Okrzyk bojowy", em:"📢", cd:4,
+     opis:"Rani, ogłusza i wzmacnia obronę na 3 tury"},
+    {id:'furia',  n:"Furia",         em:"🔥", cd:5,
+     opis:"Rani i wzmacnia trzy kolejne ataki o 45%"}
+  ],
+  lowca:[
+    {id:'seria',  n:"Seria strzał",  em:"🏹", cd:4,
+     opis:"Trzy szybkie strzały, każdy może trafić krytycznie"},
+    {id:'celny',  n:"Celny strzał",  em:"🎯", cd:5,
+     opis:"Pewny krytyk, omija pancerz"}
+  ],
+  mag:[
+    {id:'kula',   n:"Kula ognia",    em:"☄️", cd:4,
+     opis:"Potężny cios ignorujący pancerz"},
+    {id:'wyssanie',n:"Wyssanie życia",em:"🩸", cd:5,
+     opis:"Rani i leczy cię o połowę zadanych obrażeń"}
+  ]
+};
+
 const Fight={
   mob:null,mhp:0,mmax:0,busy:false,
   cd:{}, efekty:{}, ostatnia:null, rozped:0, blok:0,
@@ -1786,6 +1875,7 @@ const Fight={
     this.kolejka=(mob.druzyna||[]).slice();
     this.mmax=Math.round(MHP*mob.b*mScale(mob.lvl));this.mhp=this.mmax;
     this.cd={}; this.efekty={}; this.ostatnia=null; this.rozped=0; this.blok=0;
+    this.furia=0; this.tarcza=0;
     $('fEm').innerHTML=icon(mob.em,'mobs',mob.gat,64);
     $('fName').textContent=mob.n;
     $('fName').style.color=mob.afiks.kol||'';
@@ -1812,6 +1902,12 @@ const Fight={
         ${a.em} ${a.n}${bonus}${gotowa?'':` (${this.cd[k]})`}</button>`;
     }).join('');
     const el=$('akcje'); if(el) el.innerHTML=przyciski;
+    const um=$('umiej');
+    if(um) um.innerHTML=(UMIEJETNOSCI[S.klasa]||[]).map(u=>{
+      const g=!(this.cd[u.id]>0);
+      return `<button class="btn ${g?'':'off'}" onclick="Fight.umiej('${u.id}')" title="${u.opis}">
+        ${u.em} ${u.n}${g?'':` (${this.cd[u.id]})`}</button>`;
+    }).join('');
     const bm=$('btnMikst'); if(bm) bm.innerHTML=`🧪 Mikstura (${iloscFlasz()})`;
     /* efekty na potworze */
     const ef=$('fEfekty');
@@ -1821,9 +1917,58 @@ const Fight={
       if(this.efekty.oglusz) l.push(`💫 ogłuszony ${this.efekty.oglusz}`);
       if(this.rozped) l.push(`⚡ rozpęd`);
       if(this.blok) l.push(`🛡️ postawa`);
+      if(this.furia) l.push(`🔥 furia ${this.furia}`);
+      if(this.tarcza) l.push(`📢 tarcza ${this.tarcza}`);
       ef.innerHTML=l.map(x=>`<span class="chip">${x}</span>`).join(' ');
     }
     refreshHUD();
+  },
+  umiej(id){
+    if(this.busy||!this.mob)return;
+    const u=(UMIEJETNOSCI[S.klasa]||[]).find(x=>x.id===id); if(!u)return;
+    if(this.cd[id]>0) return toast(`${u.n}: jeszcze ${this.cd[id]} tur.`);
+    const st=stats();
+    const cios=(mult,przeb,kryt)=>{
+      const kr = kryt || Math.random()<st.kryt;
+      let d=st.atk*mult*(0.85+Math.random()*0.3)*(kr?1.7:1)*(1-MOBARM*(1-(przeb||0)));
+      return {d:Math.max(1,Math.round(d)), kr};
+    };
+    let opis='';
+    if(id==='okrzyk'){
+      const c=cios(0.7);
+      this.mhp-=c.d; this.efekty.oglusz=1; this.tarcza=3;
+      this.line(`📢 <b>Okrzyk bojowy!</b> ${c.d} obrażeń, ${this.mob.n} zamiera,
+        ty stajesz twardziej na 3 tury.`,'b');
+    }
+    if(id==='furia'){
+      const c=cios(1.0);
+      this.mhp-=c.d; this.furia=3;
+      this.line(`🔥 <b>Furia!</b> ${c.d} obrażeń, trzy następne ciosy mocniejsze o 60%.`,'y');
+    }
+    if(id==='seria'){
+      let suma=0,kryty=0;
+      for(let i=0;i<3;i++){ const c=cios(0.62); suma+=c.d; if(c.kr)kryty++; this.mhp-=c.d }
+      this.line(`🏹 <b>Seria strzał:</b> ${suma} obrażeń${kryty?` (${kryty}× krytyk)`:''}.`,kryty?'y':'b');
+    }
+    if(id==='celny'){
+      const c=cios(1.5,0.9,true); this.mhp-=c.d;
+      this.line(`🎯 <b>Celny strzał!</b> ${c.d} obrażeń na wskroś pancerza.`,'y');
+    }
+    if(id==='kula'){
+      const c=cios(1.85,1.0); this.mhp-=c.d;
+      this.line(`☄️ <b>Kula ognia!</b> ${c.d} obrażeń.`,'y');
+    }
+    if(id==='wyssanie'){
+      const c=cios(1.25,0.5); this.mhp-=c.d;
+      const lecz=Math.round(c.d*0.5);
+      S.hp=Math.min(st.hpMax,S.hp+lecz);
+      this.line(`🩸 <b>Wyssanie:</b> ${c.d} obrażeń, odzyskujesz ${lecz} życia.`,'g');
+    }
+    this.cd[id]=u.cd;
+    this.blok=0; this.ostatnia=id;
+    this.draw();
+    if(this.mhp<=0)return this.win();
+    this.turaPotwora(1);
   },
   akcja(k){
     if(this.busy||!this.mob)return;
@@ -1844,6 +1989,7 @@ const Fight={
       this.cd[k]=AKCJE[k].cd; this.ostatnia=k; this.draw(); this.turaPotwora(0.4); return;
     }
     if(this.rozped&&k!=='cios'){ mult*=1.15; this.rozped=0; }
+    if(this.furia>0){ mult*=1.5; this.furia--; opis=(opis?opis+' ':'')+'Furia!'; }
     const kryt=Math.random()<st.kryt;
     let dmg=st.atk*mult*(0.85+Math.random()*0.3)*(kryt?1.7:1)*(1-MOBARM*(1-przebicie));
     dmg=Math.max(1,Math.round(dmg));
@@ -1881,6 +2027,7 @@ const Fight={
       }
       const base=MDMG*(1+(m.b-1)*0.5)*mScale(m.lvl);
       let dmg=Math.round(base*(0.8+Math.random()*0.4)*(1-armorOf(st))*mnoznikObr);
+      if(this.tarcza>0){ dmg=Math.round(dmg*0.7); this.tarcza--; }
       dmg=Math.max(1,dmg);
       S.hp-=dmg;
       this.line(`${m.n} zadaje <b>${dmg}</b> obrażeń.${mnoznikObr<1?' (zablokowane)':''}`,'r');
@@ -1929,12 +2076,14 @@ const Fight={
     }
     if(Math.random()<0.18){S.flasz.m1=(S.flasz.m1||0)+1;this.line("Znajdujesz małą miksturę 🧪",'y')}
     Quest.poWalce(m);
+    if(Game.pos) Legowiska.zanotuj(Game.pos, m.sfera);
+    Osiagniecia.sprawdz();
     /* kolejny z drużyny wchodzi bez przerwy — życia się nie odnawia */
     if(this.kolejka && this.kolejka.length){
       const nast=this.kolejka.shift();
       this.mob={...nast, key:m.key, pos:m.pos};
       this.mmax=Math.round(MHP*nast.b*mScale(nast.lvl)); this.mhp=this.mmax;
-      this.cd={}; this.efekty={}; this.rozped=0; this.blok=0;
+      this.cd={}; this.efekty={}; this.rozped=0; this.blok=0; this.furia=0; this.tarcza=0;
       $('fName').textContent=nast.n+(this.kolejka.length?` (jeszcze ${this.kolejka.length})`:'');
       $('fEm').innerHTML=icon(nast.em,'mobs',nast.gat,64);
       this.line(`<b>Do walki staje kolejny: ${nast.n}!</b>`,'r');
@@ -2320,6 +2469,181 @@ function blokadaJazdy(){
   return true;
 }
 
+/* ================= OSIĄGNIĘCIA I TYTUŁY =================
+   Cel dla kogoś, kto ma już wszystko kupione. Tytuł pokazuje się przy
+   nazwie postaci, więc jest po co je zbierać. */
+const OSIAGNIECIA=[
+  {id:'a1', n:"Pierwsza krew",     em:"🩸", tyt:null,             opis:"Pokonaj pierwszego potwora",
+   ile:1,    licz:()=>S.zabite},
+  {id:'a2', n:"Łowca",             em:"⚔️", tyt:"Łowca",           opis:"Pokonaj 50 potworów",
+   ile:50,   licz:()=>S.zabite},
+  {id:'a3', n:"Pogromca",          em:"💀", tyt:"Pogromca",        opis:"Pokonaj 500 potworów",
+   ile:500,  licz:()=>S.zabite},
+  {id:'a4', n:"Wędrowiec",         em:"🥾", tyt:"Wędrowiec",       opis:"Przejdź 25 km",
+   ile:25000,licz:()=>S.dystans},
+  {id:'a5', n:"Piechur",           em:"🗺️", tyt:"Piechur",         opis:"Przejdź 100 km",
+   ile:100000,licz:()=>S.dystans},
+  {id:'a6', n:"Zielarz",           em:"🌿", tyt:"Zielarz",         opis:"Zbierz 100 surowców",
+   ile:100,  licz:()=>S.zebrane||0},
+  {id:'a7', n:"Badacz",            em:"📖", tyt:"Badacz",          opis:"Odkryj 30 gatunków",
+   ile:30,   licz:()=>Object.keys(S.bestia||{}).length},
+  {id:'a8', n:"Kartograf",         em:"🌫️", tyt:"Kartograf",       opis:"Odkryj 500 pól mapy",
+   ile:500,  licz:()=>Object.keys(S.odkryte||{}).length},
+  {id:'a9', n:"Bogacz",            em:"💰", tyt:"Bogacz",          opis:"Uzbieraj 10 000 złota",
+   ile:10000,licz:()=>S.gold},
+  {id:'a10',n:"Gospodarz",         em:"🕳️", tyt:"Gospodarz",       opis:"Załóż 3 legowiska",
+   ile:3,    licz:()=>Object.values(S.leg||{}).filter(l=>l.ile>=PROG_LEGOWISKA).length},
+  {id:'a11',n:"Wytrwały",          em:"🔥", tyt:"Wytrwały",        opis:"Graj 7 dni z rzędu",
+   ile:7,    licz:()=>S.seria||0},
+  {id:'a12',n:"Pan Bestii",        em:"🐉", tyt:"Pan Bestii",      opis:"Odkryj wszystkie 82 gatunki",
+   ile:82,   licz:()=>Object.keys(S.bestia||{}).length}
+];
+const Osiagniecia={
+  sprawdz(){
+    S.osiag=S.osiag||{};
+    let nowe=[];
+    OSIAGNIECIA.forEach(o=>{
+      if(S.osiag[o.id]) return;
+      if(o.licz()>=o.ile){ S.osiag[o.id]=Date.now(); nowe.push(o) }
+    });
+    if(nowe.length){
+      save();
+      nowe.forEach((o,i)=>setTimeout(()=>{
+        toast(`${o.em} <b>Osiągnięcie: ${o.n}</b>`+
+          (o.tyt?`<br><span style="color:#8b949e">Tytuł: ${o.tyt}</span>`:''),3000);
+      }, i*900));
+      refreshHUD();
+    }
+    return nowe;
+  },
+  zdobyte(){ return OSIAGNIECIA.filter(o=>(S.osiag||{})[o.id]) },
+  tytul(){
+    if(S.tytul && (S.osiag||{})[OSIAGNIECIA.find(o=>o.tyt===S.tytul)?.id]) return S.tytul;
+    return null;
+  },
+  ustawTytul(t){ S.tytul=(S.tytul===t?null:t); save(); refreshHUD(); UI.osiagSheet() }
+};
+
+/* ================= DZIENNE ZADANIE I SERIA DNI =================
+   Najważniejsza rzecz dla powrotów: jedno zadanie na dobę i licznik dni
+   z rzędu. Nagroda rośnie z długością serii, więc przerwanie boli. */
+const DZIENNE=[
+  {id:'d1', em:"⚔️", n:"Pokonaj 8 potworów",        ile:8,  pole:'zabite'},
+  {id:'d2', em:"🥾", n:"Przejdź 2 km",              ile:2000,pole:'dystans'},
+  {id:'d3', em:"🌿", n:"Zbierz 6 surowców",         ile:6,  pole:'zebrane'},
+  {id:'d4', em:"📖", n:"Odkryj 2 nowe gatunki",     ile:2,  pole:'gatunki'},
+  {id:'d5', em:"🌫️", n:"Odkryj 40 pól mapy",        ile:40, pole:'pola'}
+];
+const Dzienne={
+  dzis(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate() },
+  stan(){
+    const dzis=this.dzis();
+    if(!S.dzienne || S.dzienne.dzien!==dzis){
+      /* nowy dzień: seria rośnie, jeśli grało się wczoraj */
+      const wczoraj=new Date(Date.now()-86400000);
+      const wcz=wczoraj.getFullYear()+'-'+(wczoraj.getMonth()+1)+'-'+wczoraj.getDate();
+      if(S.dzienne){
+        S.seria = (S.dzienne.dzien===wcz) ? (S.seria||0)+1 : 1;
+      } else S.seria=1;
+      const r=rng(hash('dz|'+dzis));
+      const z=DZIENNE[Math.floor(r()*DZIENNE.length)];
+      S.dzienne={dzien:dzis, id:z.id, baza:this.licznik(z.pole), odebrane:false};
+      save();
+    }
+    const z=DZIENNE.find(x=>x.id===S.dzienne.id)||DZIENNE[0];
+    const postep=Math.max(0,this.licznik(z.pole)-S.dzienne.baza);
+    return {z, postep:Math.min(postep,z.ile), gotowe:postep>=z.ile, odebrane:S.dzienne.odebrane};
+  },
+  licznik(pole){
+    if(pole==='gatunki') return Object.keys(S.bestia||{}).length;
+    if(pole==='pola') return Object.keys(S.odkryte||{}).length;
+    return S[pole]||0;
+  },
+  nagroda(){
+    const s=S.seria||1;
+    return {xp:Math.round(xpNeed(S.lvl)*0.35*(1+Math.min(s,10)*0.12)),
+            zloto:Math.round(przychodH(S.lvl)*0.4*(1+Math.min(s,10)*0.15))};
+  },
+  odbierz(){
+    const st=this.stan();
+    if(!st.gotowe||st.odebrane) return;
+    const n=this.nagroda();
+    S.xp+=n.xp; S.gold+=n.zloto;
+    S.dzienne.odebrane=true;
+    /* co siódmy dzień dodatkowa mikstura */
+    if((S.seria||1)%7===0){ S.flasz.m3=(S.flasz.m3||0)+1 }
+    while(S.xp>=xpNeed(S.lvl)){S.xp-=xpNeed(S.lvl);S.lvl++;S.hp=baseStats().hpMax}
+    Osiagniecia.sprawdz();
+    save(); refreshHUD(); UI.dzienneSheet();
+    toast(`✅ <b>Zadanie dnia wykonane!</b><br>+${n.xp} xp · +${n.zloto} złota`+
+      ((S.seria||1)%7===0?'<br>🍶 Bonus za 7 dni: duża mikstura':''),3200);
+  }
+};
+
+/* ================= LEGOWISKA =================
+   Jeśli w jednym miejscu wybijesz dość potworów tej samej sfery, zakłada się
+   tam legowisko: mocniejsze potwory, wyraźnie lepszy łup.
+
+   To jedyna mechanika, która naprawdę wykorzystuje fakt, że gra toczy się na
+   TWOJEJ mapie — konkretne miejsca w okolicy zaczynają coś znaczyć i wraca
+   się do nich celowo, zamiast łazić gdziekolwiek. */
+const PROG_LEGOWISKA=10;
+const Legowiska={
+  markery:{},
+  klucz(pos,sfera){ return cellId(pos)+'|'+sfera },
+  /* liczymy zabójstwa w miejscu; po przekroczeniu progu powstaje legowisko */
+  zanotuj(pos,sfera){
+    if(!pos||!sfera) return null;
+    S.leg=S.leg||{};
+    const k=this.klucz(pos,sfera);
+    const l=S.leg[k]||{ile:0,sfera,lat:0,lng:0};
+    l.ile++; l.sfera=sfera;
+    const c=cellCenter(cellId(pos)); l.lat=c.lat; l.lng=c.lng;
+    S.leg[k]=l;
+    if(l.ile===PROG_LEGOWISKA){
+      const sf=SFERY[sfera];
+      toast(`🕳️ <b>Powstało legowisko!</b><br>
+        <span style="color:#8b949e">${sf.em} ${sf.n} · mocniejsze potwory, lepszy łup</span>`,3600);
+      this.rysuj();
+      return l;
+    }
+    if(l.ile>PROG_LEGOWISKA && l.ile%5===0) save();
+    return null;
+  },
+  /* czy dana pozycja leży w legowisku i jakiej sfery */
+  wPobliżu(pos){
+    if(!S.leg) return null;
+    for(const k in S.leg){
+      const l=S.leg[k];
+      if(l.ile<PROG_LEGOWISKA) continue;
+      if(dist(pos,{lat:l.lat,lng:l.lng})<90) return l;
+    }
+    return null;
+  },
+  rysuj(){
+    if(!Game.map) return;
+    const zyje={};
+    for(const k in (S.leg||{})){
+      const l=S.leg[k];
+      if(l.ile<PROG_LEGOWISKA) continue;
+      if(Game.pos && dist(Game.pos,{lat:l.lat,lng:l.lng})>1500) continue;
+      zyje[k]=1;
+      if(this.markery[k]) continue;
+      const sf=SFERY[l.sfera]||{em:'🕳️',n:'?'};
+      const mk=L.marker([l.lat,l.lng],{icon:L.divIcon({className:'',
+        html:`<div class="legow">🕳️<b>${sf.em}</b></div>`,iconSize:[34,34],iconAnchor:[17,17]})})
+        .addTo(Game.map).on('click',()=>{
+          toast(`🕳️ <b>Legowisko: ${sf.n}</b><br>
+            <span style="color:#8b949e">${l.ile} pokonanych w tym miejscu ·
+            mocniejsze potwory, podwójny łup</span>`,3000);
+        });
+      this.markery[k]=mk;
+    }
+    for(const k in this.markery)
+      if(!zyje[k]){ try{Game.map.removeLayer(this.markery[k])}catch(e){}; delete this.markery[k] }
+  }
+};
+
 /* ================= GRANICE STREF NA MAPIE =================
    Okręgi wokół domu pokazujące, gdzie kończy się jedna strefa, a zaczyna
    następna — żeby od razu było widać, jak daleko można się zapuścić
@@ -2535,6 +2859,7 @@ const Game={
   stopGPS(){ if(this.watchId!=null){ navigator.geolocation.clearWatch(this.watchId); this.watchId=null } },
   boot(){
     if(!S.hp||S.hp<=0)S.hp=baseStats().hpMax;
+    Dzienne.stan(); Osiagniecia.sprawdz();
     refreshHUD();Quest.rysuj();
     if(!navigator.geolocation){toast("Brak geolokalizacji — włączam symulację.");Sim.toggle();return}
     this.startGPS(true);
@@ -2587,7 +2912,7 @@ const Game={
     Zagrozenie.sprawdz(p);
     const noweP=Mgla.odkryj(p);
     if(noweP>=3) toast(`🌫️ Odkryto nowy teren <span style="color:#8b949e">(${Mgla.ile()} pól)</span>`,1500);
-    Quest.sprawdz();refreshHUD();
+    Quest.sprawdz();Osiagniecia.sprawdz();refreshHUD();
     if(now-this.worldT>4000){this.worldT=now;Spawner.refresh();save()}
   },
   center(){this.follow=true;if(this.pos)this.map.setView([this.pos.lat,this.pos.lng],17)}
